@@ -93,6 +93,7 @@ export function DecisionControls({ client, run, onComplete, onSuccess }: { clien
   }
 
   if (!run.active_gate || !run.abilities.includes("approve")) return null;
+  if (run.active_gate === "plan" && capabilities?.state === "approved") return <McpCapabilityEvidence run={run} />;
   const selectedKeys = new Set(selectedGrants.map(mcpSelectionKey));
   const toggleGrant = (grant: McpToolSelection) => {
     const key = mcpSelectionKey(grant);
