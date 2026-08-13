@@ -30,7 +30,7 @@ export function McpCapabilityEvidence({ run }: { run: Run }) {
   const selected = capabilities.selected_grants;
   return <section aria-label="Governed MCP capability evidence" className="mcp-capabilities">
     <h3>Governed MCP capabilities</h3>
-    <p className="control-note">Server-pinned evidence only. This surface cannot configure endpoints, invoke tools, or expand authority.</p>
+    <p className="control-note">Inherited workflow authority. Server-pinned grants apply to eligible agents for this workflow; this surface cannot configure endpoints, invoke tools, or expand authority.</p>
     {capabilities.state === "approved" && <p className="mcp-selection-summary">{selected === null ? "All pinned capability grants were retained." : selected.length === 0 ? "No MCP tools were selected." : `${selected.length} recorded capability grant${selected.length === 1 ? "" : "s"}.`}</p>}
     <ul className="mcp-grant-list">
       {(selected ?? capabilities.pinned_grants).map((grant) => <li key={mcpSelectionKey(grant)}>{capabilityLabel(grant)}</li>)}
@@ -45,23 +45,11 @@ export function DecisionControls({ client, run, onComplete, onSuccess }: { clien
   const mounted = useRef(false);
   const artifact = run.active_gate ? run.artifacts.find((item) => item.kind === run.active_gate) : null;
   const capabilities = run.active_gate === "plan" && isDisplaySafeCapabilities(run.mcp_capabilities) ? run.mcp_capabilities : null;
-  const selectableCapabilities = capabilities?.state === "awaiting_plan_approval" ? capabilities : null;
-  const [selectedGrants, setSelectedGrants] = useState<McpToolSelection[]>(() => selectableCapabilities?.pinned_grants ?? []);
-  const [selectionChanged, setSelectionChanged] = useState(false);
-  const selectionScope = selectableCapabilities ? `${run.run_id}:${selectableCapabilities.pinned_grants.map(mcpSelectionKey).sort().join("|")}` : null;
-  const previousSelectionScope = useRef(selectionScope);
 
   useEffect(() => {
     mounted.current = true;
     return () => { mounted.current = false; };
   }, []);
-
-  useEffect(() => {
-    if (!selectionScope || previousSelectionScope.current === selectionScope) return;
-    previousSelectionScope.current = selectionScope;
-    setSelectedGrants(selectableCapabilities?.pinned_grants ?? []);
-    setSelectionChanged(false);
-  }, [selectableCapabilities, selectionScope]);
 
   async function decide(decision: "approve" | "reject" | "request_revision") {
     if (decision !== "approve" && !comment.trim()) {
@@ -71,7 +59,7 @@ export function DecisionControls({ client, run, onComplete, onSuccess }: { clien
     try {
       setPending(true);
       setMessage(null);
-      await client.decide(run, decision, comment, decision === "approve" && selectableCapabilities ? (selectionChanged ? selectedGrants : null) : undefined);
+      await client.decide(run, decision, comment, decision === "approve" && capabilities ? null : undefined);
       const refreshed = await onComplete();
       if (refreshed === false) {
         if (mounted.current) setMessage("Decision accepted, but canonical state could not be refreshed.");
@@ -94,14 +82,6 @@ export function DecisionControls({ client, run, onComplete, onSuccess }: { clien
 
   if (!run.active_gate || !run.abilities.includes("approve")) return null;
   if (run.active_gate === "plan" && capabilities?.state === "approved") return <McpCapabilityEvidence run={run} />;
-  const selectedKeys = new Set(selectedGrants.map(mcpSelectionKey));
-  const toggleGrant = (grant: McpToolSelection) => {
-    const key = mcpSelectionKey(grant);
-    setSelectionChanged(true);
-    setSelectedGrants((current) => current.some((item) => mcpSelectionKey(item) === key)
-      ? current.filter((item) => mcpSelectionKey(item) !== key)
-      : [...current, grant]);
-  };
   return (
     <section aria-label="Approval decision" className="decision-panel">
       <h3>{run.active_gate} approval gate</h3>
@@ -110,12 +90,7 @@ export function DecisionControls({ client, run, onComplete, onSuccess }: { clien
         <code aria-label={`Exact ${run.active_gate} decision artifact SHA-256`}>{artifact?.sha256 ?? "Unavailable"}</code>
       </p>
       {!artifact && <p className="evidence-error" role="alert">The authoritative decision artifact is unavailable; no action can be submitted.</p>}
-      {selectableCapabilities && <fieldset className="mcp-selector" disabled={pending || !artifact}>
-        <legend>Governed MCP capability selection</legend>
-        <p className="control-note">Only these exact server-pinned grants can be retained or removed. Leaving the default unchanged preserves all pinned grants.</p>
-        <label className="mcp-empty-choice"><input type="checkbox" checked={selectedGrants.length === 0} onChange={() => { setSelectionChanged(true); setSelectedGrants([]); }} /> Approve with no MCP tools</label>
-        <div className="mcp-grant-list">{selectableCapabilities.pinned_grants.map((grant) => <label key={mcpSelectionKey(grant)}><input type="checkbox" checked={selectedKeys.has(mcpSelectionKey(grant))} onChange={() => toggleGrant(grant)} /> {capabilityLabel(grant)}</label>)}</div>
-      </fieldset>}
+      {capabilities && <McpCapabilityEvidence run={run} />}
       <label className="form-field" htmlFor="decision-comment"><span>Rationale for rejection or revision</span>
         <textarea className="form-textarea" id="decision-comment" value={comment} onChange={(event) => setComment(event.target.value)} />
       </label>

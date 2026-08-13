@@ -12,37 +12,30 @@ const run = (run_id: string, grants: McpToolSelection[]): Run => ({
   mcp_capabilities: { state: "awaiting_plan_approval", pinned_grants: grants, selected_grants: null, invocation_evidence_available: false }
 });
 
-test("resets a local MCP selection when the displayed run changes", async () => {
+test("approves with the inherited workflow MCP authority", async () => {
   const decide = jest.fn<ApiClient["decide"]>().mockResolvedValue(undefined);
   const client = { decide } as unknown as ApiClient;
   const onComplete = jest.fn(async () => undefined);
   const first = run("run-first", [grant("catalog_read")]);
   const second = run("run-second", [grant("issue_read")]);
-  const view = render(<DecisionControls client={client} run={first} onComplete={onComplete} />);
-
-  fireEvent.click(screen.getByRole("checkbox", { name: /catalog_read/ }));
-  view.rerender(<DecisionControls client={client} run={second} onComplete={onComplete} />);
+  render(<DecisionControls client={client} run={second} onComplete={onComplete} />);
   fireEvent.click(screen.getByRole("button", { name: "Approve" }));
 
   await Promise.resolve();
   expect(decide).toHaveBeenCalledWith(second, "approve", "", null);
 });
 
-test("preserves a narrowed MCP selection through a transient summary refresh", async () => {
+test("does not render MCP permission controls", async () => {
   const decide = jest.fn<ApiClient["decide"]>().mockResolvedValue(undefined);
   const client = { decide } as unknown as ApiClient;
   const onComplete = jest.fn(async () => undefined);
   const current = run("run-current", [grant("catalog_read")]);
-  const summary = { ...current, mcp_capabilities: undefined };
-  const view = render(<DecisionControls client={client} run={current} onComplete={onComplete} />);
-
-  fireEvent.click(screen.getByRole("checkbox", { name: /catalog_read/ }));
-  view.rerender(<DecisionControls client={client} run={summary} onComplete={onComplete} />);
-  view.rerender(<DecisionControls client={client} run={current} onComplete={onComplete} />);
+  render(<DecisionControls client={client} run={current} onComplete={onComplete} />);
+  expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Approve" }));
 
   await Promise.resolve();
-  expect(decide).toHaveBeenCalledWith(current, "approve", "", []);
+  expect(decide).toHaveBeenCalledWith(current, "approve", "", null);
 });
 
 test("withholds malformed grant objects before they can become controls", () => {
