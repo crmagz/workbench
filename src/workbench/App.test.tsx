@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, jest } from "@jest/globals";
 
@@ -15,7 +15,7 @@ const run: Run = {
 const events: TimelineEvent[] = [{ event_id: "event-1", event_type: "plan.awaiting_approval", occurred_at: "2026-07-26T00:00:00Z", stage_id: "plan_approval", stage_ids: ["planning", "plan_approval"], gate: "plan", artifact_sha256: digest, decision: null, lifecycle_status: null, delivered: true, delivery_attempt_count: 1 }];
 
 function client(overrides: Partial<ApiClient> = {}): ApiClient {
-  return { listProjects: async () => [{ project_id: "default" }], getHealth: async () => true, listRuns: async () => ({ runs: [run], revision: "runs", etag: "runs", unchanged: false }), getRun: async () => run, getTimeline: async () => ({ events, revision: "timeline", etag: "timeline", unchanged: false }), getEvidence: async () => ({ content: '{"title":"verified"}', sha256: digest }), getFeedback: async () => [], recordFeedback: async () => ({ feedback_id: "feedback-1", run_id: run.run_id, intent: "note", artifact_sha256: digest, stage_id: "planning", actor_id: "operator", comment: "Recorded note", created_at: "2026-08-02T00:00:00Z" }), decide: async () => undefined, generateProductSpecification: async () => undefined, selectProductSpecification: async () => undefined, ...overrides };
+  return { listProjects: async () => [{ project_id: "default" }], getHealth: async () => true, listRuns: async () => ({ runs: [run], revision: "runs", etag: "runs", unchanged: false }), getRun: async () => run, getTimeline: async () => ({ events, revision: "timeline", etag: "timeline", unchanged: false }), getEvidence: async () => ({ content: '{"title":"verified"}', sha256: digest }), getFeedback: async () => [], recordFeedback: async () => ({ feedback_id: "feedback-1", run_id: run.run_id, intent: "note", artifact_sha256: digest, stage_id: "planning", actor_id: "operator", comment: "Recorded note", created_at: "2026-08-02T00:00:00Z" }), decide: async () => undefined, generateProductSpecification: async () => undefined, selectProductSpecification: async () => undefined, reviseProductSpecification: async () => undefined, ...overrides };
 }
 
 beforeEach(() => { window.history.replaceState({}, "", "/"); window.localStorage.clear(); });
@@ -119,6 +119,24 @@ test("allows a scoped operator to generate a product specification from its doss
   await user.click(screen.getByRole("button", { name: "Generate product specification" }));
 
   expect(generateProductSpecification).toHaveBeenCalledWith("run-12345678");
+});
+
+test("submits a complete edited product specification against its displayed digest", async () => {
+  const user = userEvent.setup();
+  const specificationDigest = "c".repeat(64);
+  const reviseProductSpecification = jest.fn<ApiClient["reviseProductSpecification"]>().mockResolvedValue(undefined);
+  const refinementStages: Run["stages"] = [{ stage_id: "specification", label: "Specification", state: "completed", availability: "authoritative", reason: "Stored.", artifact_kind: "source" }, { stage_id: "product_specification", label: "Product specification", state: "awaiting_operator", availability: "authoritative", reason: "Review.", artifact_kind: "product_specification" }];
+  const refinementRun: Run = { ...run, active_gate: null, product_specification_revision: 1, artifacts: [{ kind: "source", sha256: digest }, { kind: "product_specification", sha256: specificationDigest }], stages: refinementStages, workflow_graph: { nodes: refinementStages.map((stage) => ({ ...stage, node_type: "queue" })), edges: [{ source_node_id: "specification", target_node_id: "product_specification", style: "solid", emphasis: "primary" }] } };
+  render(<App client={client({ listRuns: async () => ({ runs: [refinementRun], revision: "refinement", etag: "refinement", unchanged: false }), getRun: async () => refinementRun, getEvidence: async () => ({ content: '{"title":"draft"}', sha256: specificationDigest }), reviseProductSpecification })} />);
+
+  await user.click(await screen.findByText("run-12345678"));
+  await user.click(screen.getByRole("button", { name: "Focus Product specification" }));
+  await user.click(screen.getByRole("button", { name: "Edit product specification" }));
+  const editor = await screen.findByRole("textbox", { name: "Complete product specification JSON" });
+  fireEvent.change(editor, { target: { value: '{"title":"reviewed"}' } });
+  await user.click(screen.getByRole("button", { name: "Record revised specification" }));
+
+  expect(reviseProductSpecification).toHaveBeenCalledWith(refinementRun, { title: "reviewed" });
 });
 
 test("formats authoritative configuration as syntax-highlighted JSON", async () => {

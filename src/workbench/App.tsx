@@ -158,6 +158,8 @@ function EvidenceViewer({ client, run, initial, stageId }: { client: ApiClient; 
 function ProductSpecificationControls({ client, run, onComplete }: { client: ApiClient; run: Run; onComplete: () => Promise<void> }) {
   const [pending, setPending] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [revisionText, setRevisionText] = useState("");
+  const [editorOpen, setEditorOpen] = useState(false);
   const artifact = evidenceFor(run, "product_specification");
   const selected = run.selected_product_specification_revision !== null && run.selected_product_specification_revision !== undefined;
   const act = async (action: () => Promise<void>, message: string) => {
@@ -165,10 +167,30 @@ function ProductSpecificationControls({ client, run, onComplete }: { client: Api
     catch (reason) { setNotice(reason instanceof Error ? reason.message : "The product specification action could not be completed."); }
     finally { setPending(false); }
   };
+  const beginRevision = async () => {
+    if (!artifact) return;
+    try {
+      setPending(true); setNotice(null);
+      const evidence = await client.getEvidence(run.run_id, artifact);
+      const parsed: unknown = JSON.parse(evidence.content);
+      setRevisionText(JSON.stringify(parsed, null, 2));
+      setEditorOpen(true);
+    } catch (reason) { setNotice(reason instanceof Error ? reason.message : "The immutable product specification could not be loaded."); }
+    finally { setPending(false); }
+  };
+  const submitRevision = async () => {
+    try {
+      const parsed: unknown = JSON.parse(revisionText);
+      await act(() => client.reviseProductSpecification(run, parsed), "Revision recorded. Review and select the new immutable evidence before planning.");
+      setEditorOpen(false);
+    } catch { setNotice("Enter a complete valid JSON product specification before submitting."); }
+  };
   return <section className="card dossier-section"><h2 className="panel-title">Product specification gate</h2><div className="dossier-section-body">
     <p className="control-note">Only the server can generate or select immutable specification evidence. Selection binds the digest used for plan generation.</p>
     {!artifact && <button className="button-primary" disabled={pending} aria-busy={pending} onClick={() => void act(() => client.generateProductSpecification(run.run_id), "Draft generated. Review its verified evidence before selection.")}>{pending ? "Generating…" : "Generate product specification"}</button>}
+    {artifact && !editorOpen && <button className="button-secondary" disabled={pending} aria-busy={pending} onClick={() => void beginRevision()}>{pending ? "Loading revision…" : "Edit product specification"}</button>}
     {artifact && !selected && <button className="button-primary" disabled={pending} aria-busy={pending} onClick={() => void act(() => client.selectProductSpecification(run), "Product specification selected for planning.")}>{pending ? "Selecting…" : "Select product specification"}</button>}
+    {editorOpen && <><label className="form-field" htmlFor="product-specification-revision"><span>Complete product specification JSON</span><textarea id="product-specification-revision" className="form-textarea" value={revisionText} onChange={(event) => setRevisionText(event.target.value)} aria-describedby="product-specification-revision-help" /></label><p id="product-specification-revision-help" className="form-help">A revision replaces the selected draft only after server validation and requires a new explicit selection.</p><div className="form-actions"><button className="button-primary" disabled={pending} aria-busy={pending} onClick={() => void submitRevision()}>{pending ? "Recording…" : "Record revised specification"}</button><button className="button-secondary" disabled={pending} onClick={() => setEditorOpen(false)}>Cancel revision</button></div></>}
     {selected && <p className="sync-row" role="status">Product specification revision {run.selected_product_specification_revision} is selected for planning.</p>}
     {notice && <p className="sync-row" role="status">{notice}</p>}
   </div></section>;
