@@ -35,6 +35,8 @@ export type Run = {
   status: string;
   submitted_at: string;
   workflow_id?: string | null;
+  product_specification_revision?: number;
+  selected_product_specification_revision?: number | null;
   stages?: Stage[];
   workflow_graph?: WorkflowGraph;
   active_gate: "plan" | "implementation" | null;
@@ -58,6 +60,8 @@ export type ApiClient = {
   getFeedback: (runId: string) => Promise<Feedback[]>;
   recordFeedback: (run: Run, artifact: Artifact, stageId: string, comment: string) => Promise<Feedback>;
   decide: (run: Run, decision: "approve" | "reject" | "request_revision", comment?: string) => Promise<void>;
+  generateProductSpecification: (runId: string) => Promise<void>;
+  selectProductSpecification: (run: Run) => Promise<void>;
 };
 
 const base = "/api/cogito/api/v1";
@@ -141,5 +145,17 @@ export const apiClient: ApiClient = {
     await json(response);
     // A transport/body failure before this point is ambiguous, so the key remains available for safe replay.
     inFlightDecisionKeys.delete(fingerprint);
+  },
+  async generateProductSpecification(runId) {
+    await json(await fetch(`${base}/planning-runs/${encodeURIComponent(runId)}/generate-product-specification`, { method: "POST" }));
+  },
+  async selectProductSpecification(run) {
+    const artifact = run.artifacts.find((item) => item.kind === "product_specification");
+    if (!artifact || !run.product_specification_revision) throw new Error("A displayed product specification revision is required.");
+    await json(await fetch(`${base}/planning-runs/${encodeURIComponent(run.run_id)}/select-product-specification`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
+      body: JSON.stringify({ revision: run.product_specification_revision, artifact_sha256: artifact.sha256 })
+    }));
   }
 };
