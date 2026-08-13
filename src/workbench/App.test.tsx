@@ -410,7 +410,7 @@ test("keeps a stale approval conflict visible and never claims success", async (
   expect(getRun.mock.calls.length).toBeGreaterThanOrEqual(2);
 });
 
-test("renders and submits a narrowed governed MCP selection", async () => {
+test("renders inherited governed MCP authority once for the workflow", async () => {
   const user = userEvent.setup();
   const decide = jest.fn<ApiClient["decide"]>().mockResolvedValue(undefined);
   const mcpRun: Run = { ...run, mcp_capabilities: { state: "awaiting_plan_approval", pinned_grants: [mcpGrant], selected_grants: null, invocation_evidence_available: false } };
@@ -419,10 +419,10 @@ test("renders and submits a narrowed governed MCP selection", async () => {
   await user.click(await screen.findByText("run-12345678"));
   await user.click(screen.getByRole("button", { name: "Focus Plan approval" }));
   expect(screen.getByText("developer: github_readonly_mcp@1.0.0 / catalog_read / acme/api-gateway")).toBeVisible();
-  await user.click(screen.getByRole("checkbox", { name: /catalog_read/ }));
+  expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "Approve" }));
 
-  expect(decide).toHaveBeenCalledWith(mcpRun, "approve", "", []);
+  expect(decide).toHaveBeenCalledWith(mcpRun, "approve", "", null);
 });
 
 test("hides MCP capability identities and controls from viewers", async () => {
