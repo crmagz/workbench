@@ -12,10 +12,12 @@ const token = process.env.COGITO_E2E_UPSTREAM_TOKEN;
 const readOnlyRunId = process.env.COGITO_E2E_RUN_ID;
 const waitingPlanRunId = process.env.COGITO_E2E_WAITING_PLAN_RUN_ID;
 const planArtifactSha256 = process.env.COGITO_E2E_PLAN_SHA256;
+const mcpWaitingPlanRunId = process.env.COGITO_E2E_MCP_WAITING_PLAN_RUN_ID;
+const mcpPlanArtifactSha256 = process.env.COGITO_E2E_MCP_PLAN_SHA256;
 const decision = process.env.COGITO_KIND_E2E_DECISION;
 
-if (decision && decision !== "request_revision") {
-  throw new Error("COGITO_KIND_E2E_DECISION may only be request_revision to avoid unintended live execution");
+if (decision && !["request_revision", "approve_no_mcp"].includes(decision)) {
+  throw new Error("COGITO_KIND_E2E_DECISION must be request_revision or approve_no_mcp");
 }
 
 function listen(server) {
@@ -34,6 +36,13 @@ function close(server) {
     server.close((error) => error ? reject(error) : resolve());
     server.closeAllConnections?.();
   });
+}
+
+function requirePlanInput(runId, sha256, { runIdName, sha256Name }) {
+  if (!upstreamUrl || !token || !runId || !sha256) {
+    throw new Error(`COGITO_E2E_UPSTREAM_URL, COGITO_E2E_UPSTREAM_TOKEN, ${runIdName}, and ${sha256Name} are required`);
+  }
+  if (!/^[a-f0-9]{64}$/i.test(sha256)) throw new Error(`${sha256Name} must be a SHA-256 digest`);
 }
 
 async function startWorkbenchRelay() {
@@ -94,12 +103,10 @@ test("records a non-executable note against a real source specification", async 
 
 test("verifies a waiting plan artifact and submits an explicit revision", async ({ page }) => {
   test.skip(decision !== "request_revision", "set COGITO_KIND_E2E_DECISION=request_revision to exercise the mutable waiting-gate path");
-  if (!upstreamUrl || !token || !waitingPlanRunId || !planArtifactSha256) {
-    throw new Error("COGITO_E2E_UPSTREAM_URL, COGITO_E2E_UPSTREAM_TOKEN, COGITO_E2E_WAITING_PLAN_RUN_ID, and COGITO_E2E_PLAN_SHA256 are required");
-  }
-  if (!/^[a-f0-9]{64}$/i.test(planArtifactSha256)) {
-    throw new Error("COGITO_E2E_PLAN_SHA256 must be a SHA-256 digest");
-  }
+  requirePlanInput(waitingPlanRunId, planArtifactSha256, {
+    runIdName: "COGITO_E2E_WAITING_PLAN_RUN_ID",
+    sha256Name: "COGITO_E2E_PLAN_SHA256"
+  });
   const { server, origin } = await startWorkbenchRelay();
   try {
     await page.goto(`${origin}/runs/${encodeURIComponent(waitingPlanRunId)}/plan`);
@@ -114,6 +121,39 @@ test("verifies a waiting plan artifact and submits an explicit revision", async 
     await page.getByRole("button", { name: "Request revision" }).click();
     await expect(page.getByText("Decision accepted; canonical state has been refreshed.")).toBeVisible();
     await expect(page.getByRole("button", { name: "Request revision" })).toHaveCount(0);
+  } finally {
+    await close(server);
+  }
+});
+
+test("records an explicit empty MCP selection through the deployed Kind Workbench", async ({ page }) => {
+  test.skip(decision !== "approve_no_mcp", "set COGITO_KIND_E2E_DECISION=approve_no_mcp for a disposable MCP-pinned run");
+  requirePlanInput(mcpWaitingPlanRunId, mcpPlanArtifactSha256, {
+    runIdName: "COGITO_E2E_MCP_WAITING_PLAN_RUN_ID",
+    sha256Name: "COGITO_E2E_MCP_PLAN_SHA256"
+  });
+  const { server, origin } = await startWorkbenchRelay();
+  try {
+    await page.goto(`${origin}/runs/${encodeURIComponent(mcpWaitingPlanRunId)}/plan`);
+    await expect(page.getByRole("heading", { name: "Run detail" })).toBeVisible();
+    await expect(page.getByText(mcpPlanArtifactSha256, { exact: true })).toBeVisible();
+    await page.locator(".artifact-list").getByRole("button", { name: /plan/i }).click();
+    await expect(page.getByLabel("Verified evidence")).toBeVisible();
+
+    await page.goto(`${origin}/workflows/${encodeURIComponent(mcpWaitingPlanRunId)}`);
+    await expect(page.getByRole("button", { name: "Focus Plan approval" })).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByRole("group", { name: "Governed MCP capability selection" })).toBeVisible();
+    await page.getByRole("checkbox", { name: "Approve with no MCP tools" }).check();
+    await page.getByRole("button", { name: "Approve" }).click();
+
+    await expect(page.getByText("Decision accepted; canonical state has been refreshed.")).toBeVisible();
+    await expect(page.getByText("No MCP tools were selected.")).toBeVisible();
+    await expect.poll(async () => {
+      const response = await page.request.get(`${origin}/api/cogito/api/v1/workbench/runs/${encodeURIComponent(mcpWaitingPlanRunId)}`);
+      if (!response.ok()) return null;
+      const body = await response.json();
+      return body.mcp_capabilities?.selected_grants;
+    }).toEqual([]);
   } finally {
     await close(server);
   }

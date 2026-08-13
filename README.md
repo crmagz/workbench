@@ -114,8 +114,8 @@ in an operator script. Its read-only path requires a locally forwarded API, a
 non-production development token, and the identifier of an existing scoped
 run. A separate mutable path requires a disposable run that is awaiting *plan*
 approval and the exact plan-artifact digest; it verifies the displayed evidence
-before submitting a revision. It is read-only unless
-`COGITO_KIND_E2E_DECISION=request_revision` is set:
+before submitting a decision. It is read-only unless
+`COGITO_KIND_E2E_DECISION` is set:
 
 ```sh
 COGITO_KIND_E2E=1 \
@@ -140,3 +140,17 @@ Use a separate terminal for the local API forwarding command shown above. The
 test never reads cluster credentials or passes the relay token to browser
 JavaScript. The mutable command requests a revision and therefore changes the
 specified disposable run.
+
+To validate the governed MCP approval cockpit, use a different disposable run
+whose waiting plan has server-pinned MCP grants. This action explicitly records
+an empty MCP selection, so the run may proceed into implementation. The test
+verifies the rendered approval evidence, submits the selection through the
+deployed Workbench, and confirms that the API records `selected_grants: []`:
+
+```sh
+COGITO_KIND_E2E=1 \
+COGITO_E2E_MCP_WAITING_PLAN_RUN_ID=<mcp-pinned-waiting-plan-run-id> \
+COGITO_E2E_MCP_PLAN_SHA256=<64-hex-plan-digest> \
+COGITO_KIND_E2E_DECISION=approve_no_mcp \
+npm run test:e2e:kind
+```
