@@ -67,6 +67,76 @@ test("reuses the feedback idempotency key after an ambiguous transport failure",
   expect(fetchMock.mock.calls[0]![1].headers).toEqual(fetchMock.mock.calls[1]![1].headers);
 });
 
+test("reuses the revision idempotency key after an ambiguous transport failure", async () => {
+  const specificationRun: Run = { ...run, product_specification_revision: 1, artifacts: [{ kind: "product_specification", sha256: "b".repeat(64) }] };
+  const fetchMock = jest
+    .fn<(url: string, options: RequestInit) => Promise<Response>>()
+    .mockRejectedValueOnce(new Error("network interrupted"))
+    .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({}) } as Response);
+  global.fetch = fetchMock as unknown as typeof fetch;
+
+  const parent = { revision: 1, artifactSha256: "b".repeat(64) };
+  await expect(apiClient.reviseProductSpecification(specificationRun, parent, { title: "reviewed" })).rejects.toThrow("interrupted");
+  await apiClient.reviseProductSpecification(specificationRun, parent, { title: "reviewed" });
+
+  expect(fetchMock.mock.calls[0]![1].headers).toEqual(fetchMock.mock.calls[1]![1].headers);
+  expect(JSON.parse(fetchMock.mock.calls[1]![1].body as string)).toMatchObject({
+    expected_product_specification_revision: 1,
+    parent_artifact_sha256: "b".repeat(64), specification: { title: "reviewed" }
+  });
+});
+
+test("reuses the revision idempotency key when a successful response body is interrupted", async () => {
+  const specificationRun: Run = { ...run, product_specification_revision: 2, artifacts: [{ kind: "product_specification", sha256: "c".repeat(64) }] };
+  const parent = { revision: 1, artifactSha256: "b".repeat(64) };
+  const fetchMock = jest
+    .fn<(url: string, options: RequestInit) => Promise<Response>>()
+    .mockResolvedValueOnce({ ok: true, status: 200, json: async () => { throw new Error("truncated"); } } as unknown as Response)
+    .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({}) } as Response);
+  global.fetch = fetchMock as unknown as typeof fetch;
+
+  await expect(apiClient.reviseProductSpecification(specificationRun, parent, { title: "reviewed" })).rejects.toThrow("retry safely");
+  await apiClient.reviseProductSpecification(specificationRun, parent, { title: "reviewed" });
+
+  expect(fetchMock.mock.calls[0]![1].headers).toEqual(fetchMock.mock.calls[1]![1].headers);
+});
+
+test("reuses the revision idempotency key after an ambiguous relay timeout", async () => {
+  const parent = { revision: 1, artifactSha256: "b".repeat(64) };
+  const fetchMock = jest
+    .fn<(url: string, options: RequestInit) => Promise<Response>>()
+    .mockResolvedValueOnce({ ok: false, status: 504 } as Response)
+    .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({}) } as Response);
+  global.fetch = fetchMock as unknown as typeof fetch;
+
+  await expect(apiClient.reviseProductSpecification(run, parent, { title: "reviewed" })).rejects.toThrow("504");
+  await apiClient.reviseProductSpecification(run, parent, { title: "reviewed" });
+
+  expect(fetchMock.mock.calls[0]![1].headers).toEqual(fetchMock.mock.calls[1]![1].headers);
+});
+
+test("binds a revision submission to the immutable parent captured by the editor", async () => {
+  const laterRun: Run = { ...run, product_specification_revision: 2, artifacts: [{ kind: "product_specification", sha256: "c".repeat(64) }] };
+  const fetchMock = jest.fn<(url: string, options: RequestInit) => Promise<Response>>(async () => ({ ok: true, status: 200, json: async () => ({}) } as Response));
+  global.fetch = fetchMock as unknown as typeof fetch;
+
+  await apiClient.reviseProductSpecification(laterRun, { revision: 1, artifactSha256: "b".repeat(64) }, { title: "reviewed" });
+
+  expect(JSON.parse(fetchMock.mock.calls[0]![1].body as string)).toMatchObject({
+    expected_product_specification_revision: 1,
+    parent_artifact_sha256: "b".repeat(64)
+  });
+});
+
+test("rejects an oversized revision before sending it to the relay", async () => {
+  const fetchMock = jest.fn<(url: string, options: RequestInit) => Promise<Response>>();
+  global.fetch = fetchMock as unknown as typeof fetch;
+
+  await expect(apiClient.reviseProductSpecification(run, { revision: 1, artifactSha256: "b".repeat(64) }, { text: "x".repeat(100_000) })).rejects.toThrow("96 KiB");
+
+  expect(fetchMock).not.toHaveBeenCalled();
+});
+
 test("sends ETags and cancellation signals on authoritative refreshes", async () => {
   const fetchMock = jest.fn<(url: string, options: RequestInit) => Promise<Response>>(async () => (
     {

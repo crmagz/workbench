@@ -160,11 +160,13 @@ function ProductSpecificationControls({ client, run, onComplete }: { client: Api
   const [notice, setNotice] = useState<string | null>(null);
   const [revisionText, setRevisionText] = useState("");
   const [editorOpen, setEditorOpen] = useState(false);
+  const [revisionParent, setRevisionParent] = useState<{ revision: number; artifactSha256: string } | null>(null);
   const artifact = evidenceFor(run, "product_specification");
   const selected = run.selected_product_specification_revision !== null && run.selected_product_specification_revision !== undefined;
+  const mutable = run.status === "planning";
   const act = async (action: () => Promise<void>, message: string) => {
-    try { setPending(true); setNotice(null); await action(); await onComplete(); setNotice(message); }
-    catch (reason) { setNotice(reason instanceof Error ? reason.message : "The product specification action could not be completed."); }
+    try { setPending(true); setNotice(null); await action(); await onComplete(); setNotice(message); return true; }
+    catch (reason) { setNotice(reason instanceof Error ? reason.message : "The product specification action could not be completed."); return false; }
     finally { setPending(false); }
   };
   const beginRevision = async () => {
@@ -174,23 +176,25 @@ function ProductSpecificationControls({ client, run, onComplete }: { client: Api
       const evidence = await client.getEvidence(run.run_id, artifact);
       const parsed: unknown = JSON.parse(evidence.content);
       setRevisionText(JSON.stringify(parsed, null, 2));
+      setRevisionParent({ revision: run.product_specification_revision ?? 0, artifactSha256: artifact.sha256 });
       setEditorOpen(true);
     } catch (reason) { setNotice(reason instanceof Error ? reason.message : "The immutable product specification could not be loaded."); }
     finally { setPending(false); }
   };
   const submitRevision = async () => {
+    let parsed: unknown;
     try {
-      const parsed: unknown = JSON.parse(revisionText);
-      await act(() => client.reviseProductSpecification(run, parsed), "Revision recorded. Review and select the new immutable evidence before planning.");
-      setEditorOpen(false);
+      parsed = JSON.parse(revisionText);
     } catch { setNotice("Enter a complete valid JSON product specification before submitting."); }
+    if (parsed !== undefined && revisionParent && await act(() => client.reviseProductSpecification(run, revisionParent, parsed), "Revision recorded. Review and select the new immutable evidence before planning.")) { setEditorOpen(false); setRevisionParent(null); }
   };
   return <section className="card dossier-section"><h2 className="panel-title">Product specification gate</h2><div className="dossier-section-body">
     <p className="control-note">Only the server can generate or select immutable specification evidence. Selection binds the digest used for plan generation.</p>
-    {!artifact && <button className="button-primary" disabled={pending} aria-busy={pending} onClick={() => void act(() => client.generateProductSpecification(run.run_id), "Draft generated. Review its verified evidence before selection.")}>{pending ? "Generating…" : "Generate product specification"}</button>}
-    {artifact && !editorOpen && <button className="button-secondary" disabled={pending} aria-busy={pending} onClick={() => void beginRevision()}>{pending ? "Loading revision…" : "Edit product specification"}</button>}
-    {artifact && !selected && <button className="button-primary" disabled={pending} aria-busy={pending} onClick={() => void act(() => client.selectProductSpecification(run), "Product specification selected for planning.")}>{pending ? "Selecting…" : "Select product specification"}</button>}
-    {editorOpen && <><label className="form-field" htmlFor="product-specification-revision"><span>Complete product specification JSON</span><textarea id="product-specification-revision" className="form-textarea" value={revisionText} onChange={(event) => setRevisionText(event.target.value)} aria-describedby="product-specification-revision-help" /></label><p id="product-specification-revision-help" className="form-help">A revision replaces the selected draft only after server validation and requires a new explicit selection.</p><div className="form-actions"><button className="button-primary" disabled={pending} aria-busy={pending} onClick={() => void submitRevision()}>{pending ? "Recording…" : "Record revised specification"}</button><button className="button-secondary" disabled={pending} onClick={() => setEditorOpen(false)}>Cancel revision</button></div></>}
+    {!mutable && <p className="control-note">This product specification is immutable because the run is no longer in refinement.</p>}
+    {mutable && !artifact && <button className="button-primary" disabled={pending} aria-busy={pending} onClick={() => void act(() => client.generateProductSpecification(run.run_id), "Draft generated. Review its verified evidence before selection.")}>{pending ? "Generating…" : "Generate product specification"}</button>}
+    {mutable && artifact && !editorOpen && <button className="button-secondary" disabled={pending} aria-busy={pending} onClick={() => void beginRevision()}>{pending ? "Loading revision…" : "Edit product specification"}</button>}
+    {mutable && artifact && !selected && <button className="button-primary" disabled={pending} aria-busy={pending} onClick={() => void act(() => client.selectProductSpecification(run), "Product specification selected for planning.")}>{pending ? "Selecting…" : "Select product specification"}</button>}
+    {editorOpen && mutable && <><label className="form-field" htmlFor="product-specification-revision"><span>Complete product specification JSON</span><textarea id="product-specification-revision" className="form-textarea" value={revisionText} onChange={(event) => setRevisionText(event.target.value)} aria-describedby="product-specification-revision-help" /></label><p id="product-specification-revision-help" className="form-help">The complete request is limited to 96 KiB, replaces the selected draft only after server validation, and requires a new explicit selection.</p><div className="form-actions"><button className="button-primary" disabled={pending} aria-busy={pending} onClick={() => void submitRevision()}>{pending ? "Recording…" : "Record revised specification"}</button><button className="button-secondary" disabled={pending} onClick={() => { setEditorOpen(false); setRevisionParent(null); }}>Cancel revision</button></div></>}
     {selected && <p className="sync-row" role="status">Product specification revision {run.selected_product_specification_revision} is selected for planning.</p>}
     {notice && <p className="sync-row" role="status">{notice}</p>}
   </div></section>;
