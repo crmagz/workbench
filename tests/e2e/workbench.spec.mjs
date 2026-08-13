@@ -8,6 +8,7 @@ import { expect, test } from "@playwright/test";
 import { createDevelopmentServer } from "../../server.mjs";
 
 const digest = "a".repeat(64);
+const specificationDigest = "c".repeat(64);
 const now = "2026-07-27T00:00:00Z";
 
 function listen(server) {
@@ -37,6 +38,7 @@ test("operator decision refreshes a browser-rendered authoritative Workflow Canv
   const run = (detail = false) => {
     const stages = [
       { stage_id: "specification", label: "Specification", state: "completed", availability: "authoritative", reason: "Specification stored.", artifact_kind: "source" },
+      { stage_id: "product_specification", label: "Product specification", state: "completed", availability: "authoritative", reason: "Specification selected.", artifact_kind: "product_specification" },
       { stage_id: "planning", label: "Planning", state: "completed", availability: "authoritative", reason: "Plan generated.", artifact_kind: "plan" },
       { stage_id: "plan_approval", label: "Plan approval", state: approved ? "completed" : "awaiting_operator", availability: "authoritative", reason: approved ? "Gate advanced." : "Decision required.", artifact_kind: "plan" },
       { stage_id: "implementation", label: "Implementation", state: "unavailable", availability: "unavailable", reason: "Not started.", artifact_kind: null },
@@ -52,14 +54,15 @@ test("operator decision refreshes a browser-rendered authoritative Workflow Canv
     workflow_graph: {
       nodes: stages.map((stage) => ({ ...stage, node_type: stage.stage_id.includes("approval") ? "gate" : stage.stage_id === "specification" ? "queue" : "agent" })),
       edges: [
-        { source_node_id: "specification", target_node_id: "planning", style: "solid", emphasis: "primary" },
+        { source_node_id: "specification", target_node_id: "product_specification", style: "solid", emphasis: "primary" },
+        { source_node_id: "product_specification", target_node_id: "planning", style: "solid", emphasis: "primary" },
         { source_node_id: "planning", target_node_id: "plan_approval", style: "solid", emphasis: "primary" },
         { source_node_id: "plan_approval", target_node_id: "implementation", style: "solid", emphasis: "primary" },
         { source_node_id: "implementation", target_node_id: "implementation_approval", style: "solid", emphasis: "primary" }
       ]
     },
     active_gate: approved ? null : "plan",
-    artifacts: [{ kind: "source", sha256: digest }, { kind: "plan", sha256: digest }],
+    artifacts: [{ kind: "source", sha256: digest }, { kind: "product_specification", sha256: specificationDigest }, { kind: "plan", sha256: digest }],
     abilities: ["view", "approve"],
     workflow: ["planning", "plan", "plan_approval"],
     budget: { max_cost_usd: 3, max_wall_clock_minutes: 45, max_review_rounds: 2, actual_cost_usd: detail ? 1.25 : null, turns_used: detail ? 42 : null },
@@ -86,6 +89,9 @@ test("operator decision refreshes a browser-rendered authoritative Workflow Canv
       }
       if (request.url?.startsWith(`/api/v1/workbench/runs/run-browser-e2e/evidence/plan?artifact_sha256=${digest}`)) {
         return send(response, 200, { kind: "plan", sha256: digest, content_type: "application/json", content: "{}" });
+      }
+      if (request.url?.startsWith(`/api/v1/workbench/runs/run-browser-e2e/evidence/product_specification?artifact_sha256=${specificationDigest}`)) {
+        return send(response, 200, { kind: "product_specification", sha256: specificationDigest, content_type: "application/json", content: '{"acceptance_criteria":[]}' });
       }
       if (request.url === "/api/v1/workbench/runs/run-browser-e2e/feedback" && request.method === "GET") {
         return send(response, 200, { items: feedback });
@@ -127,6 +133,8 @@ test("operator decision refreshes a browser-rendered authoritative Workflow Canv
     await expect(page.getByText(digest, { exact: true })).toBeVisible();
     await page.locator(".artifact-list").getByRole("button", { name: /plan/i }).click();
     await expect(page.getByLabel("Verified evidence")).toHaveText("{}");
+    await page.locator(".artifact-list").getByRole("button", { name: /Product specification/i }).click();
+    await expect(page.getByLabel("Verified evidence")).toContainText("acceptance_criteria");
 
     await page.goto(frontendOrigin);
     await page.getByText("run-browser-e2e", { exact: true }).click();
