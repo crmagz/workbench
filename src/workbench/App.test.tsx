@@ -171,6 +171,21 @@ test("does not present refinement controls after planning has advanced", async (
   expect(screen.queryByRole("button", { name: "Edit product specification" })).not.toBeInTheDocument();
 });
 
+test("requires an authoritative positive revision before offering product specification actions", async () => {
+  const user = userEvent.setup();
+  const specificationDigest = "c".repeat(64);
+  const refinementStages: Run["stages"] = [{ stage_id: "product_specification", label: "Product specification", state: "awaiting_operator", availability: "authoritative", reason: "Review.", artifact_kind: "product_specification" }];
+  const incompleteRun: Run = { ...run, status: "planning", active_gate: null, product_specification_revision: 0, artifacts: [{ kind: "product_specification", sha256: specificationDigest }], stages: refinementStages, workflow_graph: { nodes: refinementStages.map((stage) => ({ ...stage, node_type: "queue" })), edges: [] } };
+  render(<App client={client({ listRuns: async () => ({ runs: [incompleteRun], revision: "incomplete", etag: "incomplete", unchanged: false }), getRun: async () => incompleteRun })} />);
+
+  await user.click(await screen.findByText("run-12345678"));
+  await user.click(screen.getByRole("button", { name: "Focus Product specification" }));
+
+  expect(screen.getByText("The displayed product specification revision is unavailable. Refresh the run before editing or selecting it.")).toBeVisible();
+  expect(screen.queryByRole("button", { name: "Edit product specification" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Select product specification" })).not.toBeInTheDocument();
+});
+
 test("formats authoritative configuration as syntax-highlighted JSON", async () => {
   const user = userEvent.setup();
   render(<App client={client()} />);
