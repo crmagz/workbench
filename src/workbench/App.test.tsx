@@ -15,7 +15,7 @@ const run: Run = {
 const events: TimelineEvent[] = [{ event_id: "event-1", event_type: "plan.awaiting_approval", occurred_at: "2026-07-26T00:00:00Z", stage_id: "plan_approval", stage_ids: ["planning", "plan_approval"], gate: "plan", artifact_sha256: digest, decision: null, lifecycle_status: null, delivered: true, delivery_attempt_count: 1 }];
 
 function client(overrides: Partial<ApiClient> = {}): ApiClient {
-  return { listProjects: async () => [{ project_id: "default" }], getHealth: async () => true, listRuns: async () => ({ runs: [run], revision: "runs", etag: "runs", unchanged: false }), getRun: async () => run, getTimeline: async () => ({ events, revision: "timeline", etag: "timeline", unchanged: false }), getEvidence: async () => ({ content: '{"title":"verified"}', sha256: digest }), getFeedback: async () => [], recordFeedback: async () => ({ feedback_id: "feedback-1", run_id: run.run_id, intent: "note", artifact_sha256: digest, stage_id: "planning", actor_id: "operator", comment: "Recorded note", created_at: "2026-08-02T00:00:00Z" }), decide: async () => undefined, ...overrides };
+  return { listProjects: async () => [{ project_id: "default" }], getHealth: async () => true, listRuns: async () => ({ runs: [run], revision: "runs", etag: "runs", unchanged: false }), getRun: async () => run, getTimeline: async () => ({ events, revision: "timeline", etag: "timeline", unchanged: false }), getEvidence: async () => ({ content: '{"title":"verified"}', sha256: digest }), getFeedback: async () => [], recordFeedback: async () => ({ feedback_id: "feedback-1", run_id: run.run_id, intent: "note", artifact_sha256: digest, stage_id: "planning", actor_id: "operator", comment: "Recorded note", created_at: "2026-08-02T00:00:00Z" }), decide: async () => undefined, generateProductSpecification: async () => undefined, selectProductSpecification: async () => undefined, ...overrides };
 }
 
 beforeEach(() => { window.history.replaceState({}, "", "/"); window.localStorage.clear(); });
@@ -105,6 +105,20 @@ test("shows a server-attributed transition in the Planning dossier audit and ove
   expect(await screen.findByText("plan.awaiting approval")).toBeVisible();
   await user.click(screen.getByRole("tab", { name: "Audit activity" }));
   expect(screen.getByText("plan.awaiting approval")).toBeVisible();
+});
+
+test("allows a scoped operator to generate a product specification from its dossier", async () => {
+  const user = userEvent.setup();
+  const generateProductSpecification = jest.fn<ApiClient["generateProductSpecification"]>().mockResolvedValue(undefined);
+  const refinementStages: Run["stages"] = [{ stage_id: "specification", label: "Specification", state: "completed", availability: "authoritative", reason: "Stored.", artifact_kind: "source" }, { stage_id: "product_specification", label: "Product specification", state: "in_progress", availability: "authoritative", reason: "No draft.", artifact_kind: null }];
+  const refinementRun: Run = { ...run, active_gate: null, artifacts: [{ kind: "source", sha256: digest }], stages: refinementStages, workflow_graph: { nodes: refinementStages.map((stage) => ({ ...stage, node_type: "queue" })), edges: [{ source_node_id: "specification", target_node_id: "product_specification", style: "solid", emphasis: "primary" }] } };
+  render(<App client={client({ listRuns: async () => ({ runs: [refinementRun], revision: "refinement", etag: "refinement", unchanged: false }), getRun: async () => refinementRun, generateProductSpecification })} />);
+
+  await user.click(await screen.findByText("run-12345678"));
+  await user.click(screen.getByRole("button", { name: "Focus Product specification" }));
+  await user.click(screen.getByRole("button", { name: "Generate product specification" }));
+
+  expect(generateProductSpecification).toHaveBeenCalledWith("run-12345678");
 });
 
 test("formats authoritative configuration as syntax-highlighted JSON", async () => {
