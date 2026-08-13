@@ -91,7 +91,7 @@ test("preserves queries, selected request headers, upstream errors, ETags, and e
   const action = await fetch(`${origin}/api/cogito/api/v1/coordination/runs/run-123/actions/plan`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "Idempotency-Key": "action-1" },
-    body: JSON.stringify({ decision: "approve", artifact_sha256: "a".repeat(64) })
+    body: JSON.stringify({ decision: "approve", artifact_sha256: "a".repeat(64), mcp_selection: [{ role: "developer", server_id: "github_readonly_mcp" }] })
   });
   await new Promise<void>((resolve, reject) => server.close((error?: Error) => error ? reject(error) : resolve()));
 
@@ -117,7 +117,8 @@ test("preserves queries, selected request headers, upstream errors, ETags, and e
     3,
     new URL("https://api.example.test/api/v1/coordination/runs/run-123/actions/plan"),
     expect.objectContaining({
-      headers: expect.objectContaining({ authorization: "Bearer server-only-token", "idempotency-key": "action-1" })
+      headers: expect.objectContaining({ authorization: "Bearer server-only-token", "idempotency-key": "action-1" }),
+      body: expect.stringContaining('"mcp_selection"')
     })
   );
 });

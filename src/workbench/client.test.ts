@@ -18,6 +18,7 @@ const run: Run = {
   execution: null,
   external_links: []
 };
+const mcpGrant = { role: "developer", server_id: "github_readonly_mcp", server_version: "1.0.0", server_manifest_sha256: "b".repeat(64), tool_name: "catalog_read", input_schema_sha256: "c".repeat(64), repository_scope: "acme/api-gateway" };
 
 test("submits the exact displayed digest to the authoritative action route", async () => {
   const fetchMock = jest.fn<(url: string, options: RequestInit) => Promise<Response>>(async () => (
@@ -39,6 +40,29 @@ test("does not claim success after a stale authoritative conflict", async () => 
   global.fetch = jest.fn(async () => ({ ok: false, status: 409 })) as unknown as typeof fetch;
 
   await expect(apiClient.decide(run, "approve")).rejects.toThrow("409");
+});
+
+test("submits only an exact server-pinned MCP subset and preserves null defaults", async () => {
+  const fetchMock = jest.fn<(url: string, options: RequestInit) => Promise<Response>>(async () => ({ ok: true, status: 202, json: async () => ({}) } as Response));
+  global.fetch = fetchMock as unknown as typeof fetch;
+
+  await apiClient.decide(run, "approve", undefined, [mcpGrant]);
+  await apiClient.decide(run, "approve", undefined, null);
+
+  expect(JSON.parse(fetchMock.mock.calls[0]![1].body as string)).toMatchObject({ mcp_selection: [mcpGrant] });
+  expect(JSON.parse(fetchMock.mock.calls[1]![1].body as string)).toMatchObject({ mcp_selection: null });
+});
+
+test("reuses an MCP approval idempotency key after an ambiguous upstream failure", async () => {
+  const fetchMock = jest.fn<(url: string, options: RequestInit) => Promise<Response>>()
+    .mockResolvedValueOnce({ ok: false, status: 502 } as Response)
+    .mockResolvedValueOnce({ ok: true, status: 202, json: async () => ({}) } as Response);
+  global.fetch = fetchMock as unknown as typeof fetch;
+
+  await expect(apiClient.decide(run, "approve", undefined, [mcpGrant])).rejects.toThrow("502");
+  await apiClient.decide(run, "approve", undefined, [mcpGrant]);
+
+  expect(fetchMock.mock.calls[0]![1].headers).toEqual(fetchMock.mock.calls[1]![1].headers);
 });
 
 test("reuses the idempotency key after an ambiguous transport failure", async () => {

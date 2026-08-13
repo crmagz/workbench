@@ -4,6 +4,21 @@ export type Approval = { decision_id: string; gate: "plan" | "implementation"; d
 export type Budget = { max_cost_usd: number; max_wall_clock_minutes: number; max_review_rounds: number; actual_cost_usd: number | null; turns_used: number | null };
 export type Execution = { phase_count: number; succeeded_phase_count: number; failed_phase_count: number; verification_passed: number; verification_failed: number; review_status: string | null; validation_status: string | null };
 export type ExternalLink = { kind: string; label: string; url: string };
+export type McpToolSelection = {
+  role: string;
+  server_id: string;
+  server_version: string;
+  server_manifest_sha256: string;
+  tool_name: string;
+  input_schema_sha256: string;
+  repository_scope?: string | null;
+};
+export type McpCapabilities = {
+  state: "awaiting_plan_approval" | "approved" | "not_applicable";
+  pinned_grants: McpToolSelection[];
+  selected_grants: McpToolSelection[] | null;
+  invocation_evidence_available: boolean;
+};
 export type TimelineEvent = {
   event_id: string;
   event_type: string;
@@ -48,6 +63,8 @@ export type Run = {
   approval_history: Approval[];
   execution: Execution | null;
   external_links: ExternalLink[];
+  // Omitted by older API releases and withheld entirely for non-approvers.
+  mcp_capabilities?: McpCapabilities | null;
 };
 
 export type ApiClient = {
@@ -59,7 +76,7 @@ export type ApiClient = {
   getEvidence: (runId: string, artifact: Artifact) => Promise<{ content: string; sha256: string }>;
   getFeedback: (runId: string) => Promise<Feedback[]>;
   recordFeedback: (run: Run, artifact: Artifact, stageId: string, comment: string) => Promise<Feedback>;
-  decide: (run: Run, decision: "approve" | "reject" | "request_revision", comment?: string) => Promise<void>;
+  decide: (run: Run, decision: "approve" | "reject" | "request_revision", comment?: string, mcpSelection?: McpToolSelection[] | null) => Promise<void>;
   generateProductSpecification: (runId: string) => Promise<void>;
   selectProductSpecification: (run: Run) => Promise<void>;
   reviseProductSpecification: (run: Run, parent: { revision: number; artifactSha256: string }, specification: unknown) => Promise<void>;
@@ -131,24 +148,29 @@ export const apiClient: ApiClient = {
     inFlightFeedbackKeys.delete(fingerprint);
     return feedback;
   },
-  async decide(run, decision, comment) {
+  async decide(run, decision, comment, mcpSelection) {
     if (!run.active_gate) throw new Error("This run is not awaiting an operator decision");
     if (decision !== "approve" && !comment?.trim()) throw new Error("A rationale is required for this decision");
     const artifact = run.artifacts.find((item) => item.kind === run.active_gate);
     if (!artifact) throw new Error("The authoritative decision artifact is unavailable");
-    const fingerprint = `${run.run_id}:${run.active_gate}:${artifact.sha256}:${decision}`;
+    const canonicalSelection = mcpSelection === undefined ? undefined : mcpSelection === null ? null : [...mcpSelection]
+      .sort((left, right) => mcpSelectionKey(left).localeCompare(mcpSelectionKey(right)));
+    const fingerprint = `${run.run_id}:${run.active_gate}:${artifact.sha256}:${decision}:${canonicalSelection === undefined ? "omitted" : canonicalSelection === null ? "null" : JSON.stringify(canonicalSelection)}`;
     const idempotencyKey = inFlightDecisionKeys.get(fingerprint) ?? crypto.randomUUID();
     inFlightDecisionKeys.set(fingerprint, idempotencyKey);
+    const body: { decision: typeof decision; artifact_sha256: string; comment?: string; mcp_selection?: McpToolSelection[] | null } = { decision, artifact_sha256: artifact.sha256, comment };
+    if (canonicalSelection !== undefined) body.mcp_selection = canonicalSelection;
     const response = await fetch(`${base}/coordination/runs/${encodeURIComponent(run.run_id)}/actions/${run.active_gate}`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
-      body: JSON.stringify({ decision, artifact_sha256: artifact.sha256, comment })
+      body: JSON.stringify(body)
     });
     if (!response.ok) {
-      inFlightDecisionKeys.delete(fingerprint);
+      if (response.status >= 400 && response.status < 500 && response.status !== 408) inFlightDecisionKeys.delete(fingerprint);
       throw new Error(`Authoritative API request failed (${response.status})`);
     }
-    await json(response);
+    try { await response.json(); }
+    catch { throw new Error("Authoritative API response could not be read; retry safely."); }
     // A transport/body failure before this point is ambiguous, so the key remains available for safe replay.
     inFlightDecisionKeys.delete(fingerprint);
   },
@@ -199,3 +221,15 @@ export const apiClient: ApiClient = {
     inFlightRevisionKeys.delete(fingerprint);
   }
 };
+
+export function mcpSelectionKey(selection: McpToolSelection) {
+  return [
+    selection.role,
+    selection.server_id,
+    selection.server_version,
+    selection.server_manifest_sha256,
+    selection.tool_name,
+    selection.input_schema_sha256,
+    selection.repository_scope ?? ""
+  ].join("\u0000");
+}

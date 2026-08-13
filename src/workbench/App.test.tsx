@@ -13,6 +13,7 @@ const run: Run = {
   budget: { max_cost_usd: 3, max_wall_clock_minutes: 45, max_review_rounds: 2, actual_cost_usd: null, turns_used: null }, approval_history_available: true, approval_history: [], execution: null, external_links: []
 };
 const events: TimelineEvent[] = [{ event_id: "event-1", event_type: "plan.awaiting_approval", occurred_at: "2026-07-26T00:00:00Z", stage_id: "plan_approval", stage_ids: ["planning", "plan_approval"], gate: "plan", artifact_sha256: digest, decision: null, lifecycle_status: null, delivered: true, delivery_attempt_count: 1 }];
+const mcpGrant = { role: "developer", server_id: "github_readonly_mcp", server_version: "1.0.0", server_manifest_sha256: "b".repeat(64), tool_name: "catalog_read", input_schema_sha256: "c".repeat(64), repository_scope: "acme/api-gateway" };
 
 function client(overrides: Partial<ApiClient> = {}): ApiClient {
   return { listProjects: async () => [{ project_id: "default" }], getHealth: async () => true, listRuns: async () => ({ runs: [run], revision: "runs", etag: "runs", unchanged: false }), getRun: async () => run, getTimeline: async () => ({ events, revision: "timeline", etag: "timeline", unchanged: false }), getEvidence: async () => ({ content: '{"title":"verified"}', sha256: digest }), getFeedback: async () => [], recordFeedback: async () => ({ feedback_id: "feedback-1", run_id: run.run_id, intent: "note", artifact_sha256: digest, stage_id: "planning", actor_id: "operator", comment: "Recorded note", created_at: "2026-08-02T00:00:00Z" }), decide: async () => undefined, generateProductSpecification: async () => undefined, selectProductSpecification: async () => undefined, reviseProductSpecification: async () => undefined, ...overrides };
@@ -407,6 +408,51 @@ test("keeps a stale approval conflict visible and never claims success", async (
   expect(await screen.findByText("Authoritative API request failed (409)")).toBeVisible();
   expect(screen.queryByText("Decision accepted; canonical state has been refreshed.")).not.toBeInTheDocument();
   expect(getRun.mock.calls.length).toBeGreaterThanOrEqual(2);
+});
+
+test("renders and submits a narrowed governed MCP selection", async () => {
+  const user = userEvent.setup();
+  const decide = jest.fn<ApiClient["decide"]>().mockResolvedValue(undefined);
+  const mcpRun: Run = { ...run, mcp_capabilities: { state: "awaiting_plan_approval", pinned_grants: [mcpGrant], selected_grants: null, invocation_evidence_available: false } };
+  render(<App client={client({ listRuns: async () => ({ runs: [mcpRun], revision: "mcp", etag: "mcp", unchanged: false }), getRun: async () => mcpRun, decide })} />);
+
+  await user.click(await screen.findByText("run-12345678"));
+  await user.click(screen.getByRole("button", { name: "Focus Plan approval" }));
+  expect(screen.getByText("developer: github_readonly_mcp@1.0.0 / catalog_read / acme/api-gateway")).toBeVisible();
+  await user.click(screen.getByRole("checkbox", { name: /catalog_read/ }));
+  await user.click(screen.getByRole("button", { name: "Approve" }));
+
+  expect(decide).toHaveBeenCalledWith(mcpRun, "approve", "", []);
+});
+
+test("hides MCP capability identities and controls from viewers", async () => {
+  const user = userEvent.setup();
+  const viewerRun: Run = { ...run, abilities: ["view"], mcp_capabilities: { state: "awaiting_plan_approval", pinned_grants: [mcpGrant], selected_grants: null, invocation_evidence_available: false } };
+  render(<App client={client({ listRuns: async () => ({ runs: [viewerRun], revision: "viewer", etag: "viewer", unchanged: false }), getRun: async () => viewerRun })} />);
+
+  await user.click(await screen.findByText("run-12345678"));
+  await user.click(screen.getByRole("button", { name: "Focus Plan approval" }));
+  expect(screen.queryByText("developer: github_readonly_mcp@1.0.0 / catalog_read / acme/api-gateway")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
+});
+
+test("hides malformed MCP capability data rather than rendering or submitting it", async () => {
+  const user = userEvent.setup();
+  const malformedRun = { ...run, mcp_capabilities: { state: "awaiting_plan_approval", pinned_grants: "not-a-list", selected_grants: null } } as unknown as Run;
+  render(<App client={client({ listRuns: async () => ({ runs: [malformedRun], revision: "malformed", etag: "malformed", unchanged: false }), getRun: async () => malformedRun })} />);
+
+  await user.click(await screen.findByText("run-12345678"));
+  await user.click(screen.getByRole("button", { name: "Focus Plan approval" }));
+  expect(screen.queryByRole("checkbox", { name: /catalog_read/ })).not.toBeInTheDocument();
+});
+
+test("shows the authoritative recorded MCP selection after approval", async () => {
+  const approvedRun: Run = { ...run, status: "implementing", active_gate: null, mcp_capabilities: { state: "approved", pinned_grants: [mcpGrant], selected_grants: [], invocation_evidence_available: false } };
+  window.history.pushState({}, "", "/runs/run-12345678/approvals");
+  render(<App client={client({ listRuns: async () => ({ runs: [approvedRun], revision: "approved", etag: "approved", unchanged: false }), getRun: async () => approvedRun })} />);
+
+  expect(await screen.findByText("No MCP tools were selected.")).toBeVisible();
+  window.history.replaceState({}, "", "/");
 });
 
 test("shows a non-disclosing recovery state for an unavailable direct run link", async () => {

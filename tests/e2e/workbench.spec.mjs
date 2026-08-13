@@ -10,6 +10,7 @@ import { createDevelopmentServer } from "../../server.mjs";
 const digest = "a".repeat(64);
 const specificationDigest = "c".repeat(64);
 const now = "2026-07-27T00:00:00Z";
+const mcpGrant = { role: "developer", server_id: "github_readonly_mcp", server_version: "1.0.0", server_manifest_sha256: "b".repeat(64), tool_name: "catalog_read", input_schema_sha256: "c".repeat(64), repository_scope: "acme/api-gateway" };
 
 function listen(server) {
   return new Promise((resolve, reject) => {
@@ -69,7 +70,8 @@ test("operator decision refreshes a browser-rendered authoritative Workflow Canv
     approval_history_available: true,
     approval_history: detail ? [{ decision_id: "decision-browser-e2e", gate: "plan", decision: "approve", artifact_sha256: digest, actor_id: "operator-browser", created_at: now, delivered: true }] : [],
     execution: detail ? { phase_count: 2, succeeded_phase_count: 2, failed_phase_count: 0, verification_passed: 2, verification_failed: 0, review_status: "converged", validation_status: "passed" } : null,
-    external_links: detail ? [{ kind: "repository", label: "Repository", url: "https://github.com/acme/api-gateway" }] : []
+    external_links: detail ? [{ kind: "repository", label: "Repository", url: "https://github.com/acme/api-gateway" }] : [],
+    mcp_capabilities: { state: approved ? "approved" : "awaiting_plan_approval", pinned_grants: [mcpGrant], selected_grants: approved ? [] : null, invocation_evidence_available: false }
     };
   };
   const upstream = createServer((request, response) => {
@@ -161,10 +163,13 @@ test("operator decision refreshes a browser-rendered authoritative Workflow Canv
     await expect(page.getByText(/use Request revision when the work itself needs to change/)).toBeVisible();
     await expect(page.getByText(/Clarify rollout risk\./)).toBeVisible();
     await page.getByRole("tab", { name: "Overview" }).click();
+    await expect(page.getByText("developer: github_readonly_mcp@1.0.0 / catalog_read / acme/api-gateway")).toBeVisible();
+    await page.getByRole("checkbox", { name: /catalog_read/ }).uncheck();
     await page.getByRole("button", { name: "Approve" }).click();
     await expect.poll(() => actions.length).toBe(1);
     assert.equal(actions[0].payload.decision, "approve");
     assert.equal(actions[0].payload.artifact_sha256, digest);
+    assert.deepEqual(actions[0].payload.mcp_selection, []);
     assert.equal(typeof actions[0].key, "string");
     await expect(page.getByRole("button", { name: "Approve" })).toHaveCount(0);
     await expect(page.getByText("Decision accepted; canonical state has been refreshed.")).toBeVisible();
