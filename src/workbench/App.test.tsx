@@ -159,6 +159,23 @@ test("toggles selected immutable evidence from its artifact button", async () =>
   expect(evidenceButton).toHaveAttribute("aria-expanded", "false");
 });
 
+test("renders a product specification as separately verified evidence", async () => {
+  const user = userEvent.setup();
+  const specificationDigest = "c".repeat(64);
+  const refinedRun: Run = {
+    ...run,
+    artifacts: [{ kind: "source", sha256: digest }, { kind: "product_specification", sha256: specificationDigest }, { kind: "plan", sha256: digest }]
+  };
+  render(<App client={client({ listRuns: async () => ({ runs: [refinedRun], revision: "refined", etag: "refined", unchanged: false }), getRun: async () => refinedRun, getEvidence: async (_runId, artifact) => ({ content: '{"unresolved_questions":[]}', sha256: artifact.sha256 }) })} />);
+
+  await user.click(await screen.findByText("run-12345678"));
+  await user.click(screen.getByRole("tab", { name: "Specifications" }));
+  const evidence = screen.getByRole("button", { name: `Product specification ${specificationDigest.slice(0, 12)}` });
+  await user.click(evidence);
+
+  expect(await screen.findByLabelText("Verified evidence")).toHaveTextContent("unresolved_questions");
+});
+
 test("records immutable review context without presenting it as execution control", async () => {
   const user = userEvent.setup();
   const recordFeedback = jest.fn<ApiClient["recordFeedback"]>().mockResolvedValue({ feedback_id: "feedback-1", run_id: run.run_id, intent: "note", artifact_sha256: digest, stage_id: "plan_approval", actor_id: "operator", comment: "Clarify rollback.", created_at: "2026-08-02T00:00:00Z" });

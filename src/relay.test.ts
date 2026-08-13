@@ -28,6 +28,7 @@ test("forwards only allowlisted Workbench requests with the server-side credenti
   const allowed = await fetch(`${origin}/api/cogito/api/v1/workbench/runs`);
   const timeline = await fetch(`${origin}/api/cogito/api/v1/workbench/runs/run-123/timeline`);
   const feedback = await fetch(`${origin}/api/cogito/api/v1/workbench/runs/run-123/feedback`);
+  const productSpecification = await fetch(`${origin}/api/cogito/api/v1/workbench/runs/run-123/evidence/product_specification?artifact_sha256=${"a".repeat(64)}`);
   const denied = await fetch(`${origin}/api/cogito/api/v1/runs`);
   const crossOrigin = await fetch(`${origin}/api/cogito//attacker.example/api/v1/workbench/runs`);
   await new Promise<void>((resolve, reject) => server.close((error?: Error) => error ? reject(error) : resolve()));
@@ -37,7 +38,8 @@ test("forwards only allowlisted Workbench requests with the server-side credenti
   expect(crossOrigin.status).toBe(404);
   expect(timeline.status).toBe(200);
   expect(feedback.status).toBe(200);
-  expect(upstream).toHaveBeenCalledTimes(3);
+  expect(productSpecification.status).toBe(200);
+  expect(upstream).toHaveBeenCalledTimes(4);
   expect(upstream).toHaveBeenCalledWith(
     new URL("https://api.example.test/api/v1/workbench/runs"),
     expect.objectContaining({ headers: expect.objectContaining({ authorization: "Bearer server-only-token" }) })

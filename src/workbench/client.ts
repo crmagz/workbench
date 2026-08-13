@@ -1,4 +1,4 @@
-export type Artifact = { kind: "source" | "plan" | "implementation"; sha256: string };
+export type Artifact = { kind: "source" | "product_specification" | "plan" | "implementation"; sha256: string };
 export type Project = { project_id: string };
 export type Approval = { decision_id: string; gate: "plan" | "implementation"; decision: string; artifact_sha256: string; actor_id: string; created_at: string; delivered: boolean };
 export type Budget = { max_cost_usd: number; max_wall_clock_minutes: number; max_review_rounds: number; actual_cost_usd: number | null; turns_used: number | null };
