@@ -62,6 +62,7 @@ export type ApiClient = {
   decide: (run: Run, decision: "approve" | "reject" | "request_revision", comment?: string) => Promise<void>;
   generateProductSpecification: (runId: string) => Promise<void>;
   selectProductSpecification: (run: Run) => Promise<void>;
+  reviseProductSpecification: (run: Run, specification: unknown) => Promise<void>;
 };
 
 const base = "/api/cogito/api/v1";
@@ -156,6 +157,19 @@ export const apiClient: ApiClient = {
       method: "POST",
       headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
       body: JSON.stringify({ revision: run.product_specification_revision, artifact_sha256: artifact.sha256 })
+    }));
+  },
+  async reviseProductSpecification(run, specification) {
+    const artifact = run.artifacts.find((item) => item.kind === "product_specification");
+    if (!artifact || !run.product_specification_revision) throw new Error("A displayed product specification revision is required.");
+    await json(await fetch(`${base}/planning-runs/${encodeURIComponent(run.run_id)}/revise-product-specification`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
+      body: JSON.stringify({
+        expected_product_specification_revision: run.product_specification_revision,
+        parent_artifact_sha256: artifact.sha256,
+        specification
+      })
     }));
   }
 };
