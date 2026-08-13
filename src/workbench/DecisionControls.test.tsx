@@ -16,7 +16,6 @@ test("approves with the inherited workflow MCP authority", async () => {
   const decide = jest.fn<ApiClient["decide"]>().mockResolvedValue(undefined);
   const client = { decide } as unknown as ApiClient;
   const onComplete = jest.fn(async () => undefined);
-  const first = run("run-first", [grant("catalog_read")]);
   const second = run("run-second", [grant("issue_read")]);
   render(<DecisionControls client={client} run={second} onComplete={onComplete} />);
   fireEvent.click(screen.getByRole("button", { name: "Approve" }));
