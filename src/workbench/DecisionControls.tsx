@@ -6,10 +6,22 @@ function capabilityLabel(grant: McpToolSelection) {
   return `${grant.role}: ${grant.server_id}@${grant.server_version} / ${grant.tool_name}${grant.repository_scope ? ` / ${grant.repository_scope}` : ""}`;
 }
 
+function isDisplaySafeGrant(value: unknown): value is McpToolSelection {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const grant = value as Partial<McpToolSelection>;
+  return [grant.role, grant.server_id, grant.server_version, grant.server_manifest_sha256, grant.tool_name, grant.input_schema_sha256]
+    .every((field) => typeof field === "string" && field.length > 0)
+    && (grant.repository_scope === undefined || grant.repository_scope === null || typeof grant.repository_scope === "string");
+}
+
 function isDisplaySafeCapabilities(value: McpCapabilities | null | undefined): value is McpCapabilities {
   if (!value) return false;
-  return Array.isArray(value.pinned_grants)
-    && (value.selected_grants === null || Array.isArray(value.selected_grants));
+  if (!["awaiting_plan_approval", "approved", "not_applicable"].includes(value.state) || !Array.isArray(value.pinned_grants)
+    || !value.pinned_grants.every(isDisplaySafeGrant) || ![true, false].includes(value.invocation_evidence_available)) return false;
+  if (value.selected_grants === null) return true;
+  return Array.isArray(value.selected_grants)
+    && value.selected_grants.every(isDisplaySafeGrant)
+    && value.selected_grants.every((grant) => value.pinned_grants.some((pin) => mcpSelectionKey(pin) === mcpSelectionKey(grant)));
 }
 
 export function McpCapabilityEvidence({ run }: { run: Run }) {
@@ -26,7 +38,7 @@ export function McpCapabilityEvidence({ run }: { run: Run }) {
   </section>;
 }
 
-export function DecisionControls({ client, run, onComplete, onSuccess }: { client: ApiClient; run: Run; onComplete: () => Promise<void>; onSuccess?: () => void }) {
+export function DecisionControls({ client, run, onComplete, onSuccess }: { client: ApiClient; run: Run; onComplete: () => Promise<void | boolean>; onSuccess?: () => void }) {
   const [comment, setComment] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
@@ -36,11 +48,20 @@ export function DecisionControls({ client, run, onComplete, onSuccess }: { clien
   const selectableCapabilities = capabilities?.state === "awaiting_plan_approval" ? capabilities : null;
   const [selectedGrants, setSelectedGrants] = useState<McpToolSelection[]>(() => selectableCapabilities?.pinned_grants ?? []);
   const [selectionChanged, setSelectionChanged] = useState(false);
+  const selectionScope = selectableCapabilities ? `${run.run_id}:${selectableCapabilities.pinned_grants.map(mcpSelectionKey).sort().join("|")}` : null;
+  const previousSelectionScope = useRef(selectionScope);
 
   useEffect(() => {
     mounted.current = true;
     return () => { mounted.current = false; };
   }, []);
+
+  useEffect(() => {
+    if (!selectionScope || previousSelectionScope.current === selectionScope) return;
+    previousSelectionScope.current = selectionScope;
+    setSelectedGrants(selectableCapabilities?.pinned_grants ?? []);
+    setSelectionChanged(false);
+  }, [selectableCapabilities, selectionScope]);
 
   async function decide(decision: "approve" | "reject" | "request_revision") {
     if (decision !== "approve" && !comment.trim()) {
@@ -51,7 +72,11 @@ export function DecisionControls({ client, run, onComplete, onSuccess }: { clien
       setPending(true);
       setMessage(null);
       await client.decide(run, decision, comment, decision === "approve" && selectableCapabilities ? (selectionChanged ? selectedGrants : null) : undefined);
-      await onComplete();
+      const refreshed = await onComplete();
+      if (refreshed === false) {
+        if (mounted.current) setMessage("Decision accepted, but canonical state could not be refreshed.");
+        return;
+      }
       onSuccess?.();
     } catch (error) {
       if (error instanceof Error && error.message.includes("(409)")) {

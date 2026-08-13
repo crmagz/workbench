@@ -173,6 +173,7 @@ test("operator decision refreshes a browser-rendered authoritative Workflow Canv
     assert.equal(typeof actions[0].key, "string");
     await expect(page.getByRole("button", { name: "Approve" })).toHaveCount(0);
     await expect(page.getByText("Decision accepted; canonical state has been refreshed.")).toBeVisible();
+    await expect(page.getByText("No MCP tools were selected.")).toBeVisible();
   } finally {
     await close(frontend);
     await close(upstream);
