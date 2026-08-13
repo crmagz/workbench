@@ -62,12 +62,17 @@ export type ApiClient = {
   decide: (run: Run, decision: "approve" | "reject" | "request_revision", comment?: string) => Promise<void>;
   generateProductSpecification: (runId: string) => Promise<void>;
   selectProductSpecification: (run: Run) => Promise<void>;
-  reviseProductSpecification: (run: Run, specification: unknown) => Promise<void>;
+  reviseProductSpecification: (run: Run, parent: { revision: number; artifactSha256: string }, specification: unknown) => Promise<void>;
 };
 
 const base = "/api/cogito/api/v1";
 const inFlightDecisionKeys = new Map<string, string>();
 const inFlightFeedbackKeys = new Map<string, string>();
+const inFlightRevisionKeys = new Map<string, string>();
+// The authoritative evidence reader is bounded at 100 KB. Leave room for the
+// revision envelope so an editor submission cannot be accepted by the relay
+// but become unreadable in the Workbench.
+const MAX_REFINEMENT_REQUEST_BYTES = 96 * 1024;
 
 async function json(response: Response) {
   if (!response.ok) throw new Error(`Authoritative API request failed (${response.status})`);
@@ -159,17 +164,38 @@ export const apiClient: ApiClient = {
       body: JSON.stringify({ revision: run.product_specification_revision, artifact_sha256: artifact.sha256 })
     }));
   },
-  async reviseProductSpecification(run, specification) {
-    const artifact = run.artifacts.find((item) => item.kind === "product_specification");
-    if (!artifact || !run.product_specification_revision) throw new Error("A displayed product specification revision is required.");
-    await json(await fetch(`${base}/planning-runs/${encodeURIComponent(run.run_id)}/revise-product-specification`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
-      body: JSON.stringify({
-        expected_product_specification_revision: run.product_specification_revision,
-        parent_artifact_sha256: artifact.sha256,
-        specification
-      })
-    }));
+  async reviseProductSpecification(run, parent, specification) {
+    if (!parent.revision || !parent.artifactSha256) throw new Error("A displayed product specification revision is required.");
+    const fingerprint = `${run.run_id}:${parent.revision}:${parent.artifactSha256}:${JSON.stringify(specification)}`;
+    const idempotencyKey = inFlightRevisionKeys.get(fingerprint) ?? crypto.randomUUID();
+    inFlightRevisionKeys.set(fingerprint, idempotencyKey);
+    const body = JSON.stringify({
+      expected_product_specification_revision: parent.revision,
+      parent_artifact_sha256: parent.artifactSha256,
+      specification
+    });
+    if (new Blob([body]).size > MAX_REFINEMENT_REQUEST_BYTES) {
+      inFlightRevisionKeys.delete(fingerprint);
+      throw new Error("The revised product specification exceeds the 96 KiB Workbench request limit.");
+    }
+    let response: Response;
+    try {
+      response = await fetch(`${base}/planning-runs/${encodeURIComponent(run.run_id)}/revise-product-specification`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
+        body
+      });
+    } catch { throw new Error("Authoritative API request was interrupted before a response."); }
+    if (!response.ok) {
+      // A relay 5xx can be emitted after the authoritative API committed but
+      // before the response reached the browser. Keep the key for safe replay.
+      if (response.status >= 400 && response.status < 500 && response.status !== 408) {
+        inFlightRevisionKeys.delete(fingerprint);
+      }
+      throw new Error(`Authoritative API request failed (${response.status})`);
+    }
+    try { await response.json(); }
+    catch { throw new Error("Authoritative API response could not be read; retry safely."); }
+    inFlightRevisionKeys.delete(fingerprint);
   }
 };

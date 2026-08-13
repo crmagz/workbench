@@ -27,7 +27,7 @@ function createApp() {
     response.setHeader("Content-Security-Policy", "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'; object-src 'none'");
     next();
   });
-  app.use(express.json({ limit: "16kb" }));
+  app.use(express.json({ limit: "100kb" }));
   app.use((request, response, next) => {
     if (request.path === "/api" || request.path.startsWith("/api/")) {
       response.on("finish", () => {

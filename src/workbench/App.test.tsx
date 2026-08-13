@@ -111,7 +111,7 @@ test("allows a scoped operator to generate a product specification from its doss
   const user = userEvent.setup();
   const generateProductSpecification = jest.fn<ApiClient["generateProductSpecification"]>().mockResolvedValue(undefined);
   const refinementStages: Run["stages"] = [{ stage_id: "specification", label: "Specification", state: "completed", availability: "authoritative", reason: "Stored.", artifact_kind: "source" }, { stage_id: "product_specification", label: "Product specification", state: "in_progress", availability: "authoritative", reason: "No draft.", artifact_kind: null }];
-  const refinementRun: Run = { ...run, active_gate: null, artifacts: [{ kind: "source", sha256: digest }], stages: refinementStages, workflow_graph: { nodes: refinementStages.map((stage) => ({ ...stage, node_type: "queue" })), edges: [{ source_node_id: "specification", target_node_id: "product_specification", style: "solid", emphasis: "primary" }] } };
+  const refinementRun: Run = { ...run, status: "planning", active_gate: null, artifacts: [{ kind: "source", sha256: digest }], stages: refinementStages, workflow_graph: { nodes: refinementStages.map((stage) => ({ ...stage, node_type: "queue" })), edges: [{ source_node_id: "specification", target_node_id: "product_specification", style: "solid", emphasis: "primary" }] } };
   render(<App client={client({ listRuns: async () => ({ runs: [refinementRun], revision: "refinement", etag: "refinement", unchanged: false }), getRun: async () => refinementRun, generateProductSpecification })} />);
 
   await user.click(await screen.findByText("run-12345678"));
@@ -126,7 +126,7 @@ test("submits a complete edited product specification against its displayed dige
   const specificationDigest = "c".repeat(64);
   const reviseProductSpecification = jest.fn<ApiClient["reviseProductSpecification"]>().mockResolvedValue(undefined);
   const refinementStages: Run["stages"] = [{ stage_id: "specification", label: "Specification", state: "completed", availability: "authoritative", reason: "Stored.", artifact_kind: "source" }, { stage_id: "product_specification", label: "Product specification", state: "awaiting_operator", availability: "authoritative", reason: "Review.", artifact_kind: "product_specification" }];
-  const refinementRun: Run = { ...run, active_gate: null, product_specification_revision: 1, artifacts: [{ kind: "source", sha256: digest }, { kind: "product_specification", sha256: specificationDigest }], stages: refinementStages, workflow_graph: { nodes: refinementStages.map((stage) => ({ ...stage, node_type: "queue" })), edges: [{ source_node_id: "specification", target_node_id: "product_specification", style: "solid", emphasis: "primary" }] } };
+  const refinementRun: Run = { ...run, status: "planning", active_gate: null, product_specification_revision: 1, artifacts: [{ kind: "source", sha256: digest }, { kind: "product_specification", sha256: specificationDigest }], stages: refinementStages, workflow_graph: { nodes: refinementStages.map((stage) => ({ ...stage, node_type: "queue" })), edges: [{ source_node_id: "specification", target_node_id: "product_specification", style: "solid", emphasis: "primary" }] } };
   render(<App client={client({ listRuns: async () => ({ runs: [refinementRun], revision: "refinement", etag: "refinement", unchanged: false }), getRun: async () => refinementRun, getEvidence: async () => ({ content: '{"title":"draft"}', sha256: specificationDigest }), reviseProductSpecification })} />);
 
   await user.click(await screen.findByText("run-12345678"));
@@ -136,7 +136,39 @@ test("submits a complete edited product specification against its displayed dige
   fireEvent.change(editor, { target: { value: '{"title":"reviewed"}' } });
   await user.click(screen.getByRole("button", { name: "Record revised specification" }));
 
-  expect(reviseProductSpecification).toHaveBeenCalledWith(refinementRun, { title: "reviewed" });
+  expect(reviseProductSpecification).toHaveBeenCalledWith(refinementRun, { revision: 1, artifactSha256: specificationDigest }, { title: "reviewed" });
+});
+
+test("keeps an invalid server-rejected revision in the editor for correction", async () => {
+  const user = userEvent.setup();
+  const specificationDigest = "c".repeat(64);
+  const reviseProductSpecification = jest.fn<ApiClient["reviseProductSpecification"]>().mockRejectedValue(new Error("Authoritative API request failed (422)"));
+  const refinementStages: Run["stages"] = [{ stage_id: "product_specification", label: "Product specification", state: "awaiting_operator", availability: "authoritative", reason: "Review.", artifact_kind: "product_specification" }];
+  const refinementRun: Run = { ...run, status: "planning", active_gate: null, product_specification_revision: 1, artifacts: [{ kind: "product_specification", sha256: specificationDigest }], stages: refinementStages, workflow_graph: { nodes: refinementStages.map((stage) => ({ ...stage, node_type: "queue" })), edges: [] } };
+  render(<App client={client({ listRuns: async () => ({ runs: [refinementRun], revision: "refinement", etag: "refinement", unchanged: false }), getRun: async () => refinementRun, getEvidence: async () => ({ content: '{"title":"draft"}', sha256: specificationDigest }), reviseProductSpecification })} />);
+
+  await user.click(await screen.findByText("run-12345678"));
+  await user.click(screen.getByRole("button", { name: "Focus Product specification" }));
+  await user.click(screen.getByRole("button", { name: "Edit product specification" }));
+  const editor = await screen.findByRole("textbox", { name: "Complete product specification JSON" });
+  fireEvent.change(editor, { target: { value: '{"title":"reviewed"}' } });
+  await user.click(screen.getByRole("button", { name: "Record revised specification" }));
+
+  expect(screen.getByRole("textbox", { name: "Complete product specification JSON" })).toHaveValue('{"title":"reviewed"}');
+  expect(screen.getByText("Authoritative API request failed (422)")).toBeVisible();
+});
+
+test("does not present refinement controls after planning has advanced", async () => {
+  const user = userEvent.setup();
+  const specificationDigest = "c".repeat(64);
+  const completedStages: Run["stages"] = [{ stage_id: "product_specification", label: "Product specification", state: "completed", availability: "authoritative", reason: "Selected.", artifact_kind: "product_specification" }];
+  const completedRun: Run = { ...run, product_specification_revision: 1, selected_product_specification_revision: 1, artifacts: [{ kind: "product_specification", sha256: specificationDigest }], stages: completedStages, workflow_graph: { nodes: completedStages.map((stage) => ({ ...stage, node_type: "queue" })), edges: [] } };
+  render(<App client={client({ listRuns: async () => ({ runs: [completedRun], revision: "completed", etag: "completed", unchanged: false }), getRun: async () => completedRun })} />);
+
+  await user.click(await screen.findByText("run-12345678"));
+  await user.click(screen.getByRole("button", { name: "Focus Product specification" }));
+  expect(screen.getByText("This product specification is immutable because the run is no longer in refinement.")).toBeVisible();
+  expect(screen.queryByRole("button", { name: "Edit product specification" })).not.toBeInTheDocument();
 });
 
 test("formats authoritative configuration as syntax-highlighted JSON", async () => {
