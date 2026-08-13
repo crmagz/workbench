@@ -465,6 +465,17 @@ test("shows the recorded MCP selection in the primary plan-approval dossier", as
   expect(screen.getByText("No MCP tools were selected.")).toBeVisible();
 });
 
+test("withholds another plan decision while the worker is advancing an approved MCP plan", async () => {
+  const user = userEvent.setup();
+  const pendingAdvanceRun: Run = { ...run, mcp_capabilities: { state: "approved", pinned_grants: [mcpGrant], selected_grants: [], invocation_evidence_available: false } };
+  render(<App client={client({ listRuns: async () => ({ runs: [pendingAdvanceRun], revision: "pending-advance", etag: "pending-advance", unchanged: false }), getRun: async () => pendingAdvanceRun })} />);
+
+  await user.click(await screen.findByText("run-12345678"));
+  await user.click(screen.getByRole("button", { name: "Focus Plan approval" }));
+  expect(screen.getByText("No MCP tools were selected.")).toBeVisible();
+  expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
+});
+
 test("shows a non-disclosing recovery state for an unavailable direct run link", async () => {
   window.history.pushState({}, "", "/runs/foreign-run/summary");
   const user = userEvent.setup();
