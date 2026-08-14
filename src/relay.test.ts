@@ -64,6 +64,28 @@ test("forwards only allowlisted Workbench requests with the server-side credenti
   );
 });
 
+test("forwards only the bounded read-only Agent Operations paths", async () => {
+  const upstream = jest.fn(async (): Promise<Response> => new Response(JSON.stringify({ items: [] }), { status: 200 }));
+  const app = createRelay({ upstreamUrl: "https://api.example.test", token: "server-only-token", fetchImpl: upstream as unknown as typeof fetch });
+  const server = app.listen(0, "127.0.0.1");
+  const origin = await listen(server);
+
+  const inventory = await fetch(`${origin}/api/cogito/api/v1/workbench/agents?project_id=default`);
+  const detail = await fetch(`${origin}/api/cogito/api/v1/workbench/agents/developer/1.0.0?project_id=default`);
+  const history = await fetch(`${origin}/api/cogito/api/v1/workbench/agents/developer/1.0.0/invocations?project_id=default`);
+  const invocation = await fetch(`${origin}/api/cogito/api/v1/workbench/agent-invocations/run-1/developer?project_id=default`);
+  const denied = await fetch(`${origin}/api/cogito/api/v1/workbench/agents`, { method: "POST" });
+  await new Promise<void>((resolve, reject) => server.close((error?: Error) => error ? reject(error) : resolve()));
+
+  expect([inventory.status, detail.status, history.status, invocation.status]).toEqual([200, 200, 200, 200]);
+  expect(denied.status).toBe(404);
+  expect(upstream).toHaveBeenCalledTimes(4);
+  expect(upstream).toHaveBeenCalledWith(
+    new URL("https://api.example.test/api/v1/workbench/agent-invocations/run-1/developer?project_id=default"),
+    expect.objectContaining({ method: "GET", headers: expect.objectContaining({ authorization: "Bearer server-only-token" }) })
+  );
+});
+
 test("preserves queries, selected request headers, upstream errors, ETags, and empty 304 responses", async () => {
   const upstream = jest.fn(async (url: URL, init: RequestInit): Promise<Response> => {
     if (url.searchParams.has("artifact_sha256")) {

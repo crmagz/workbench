@@ -66,6 +66,40 @@ export type Run = {
   // Omitted by older API releases and withheld entirely for non-approvers.
   mcp_capabilities?: McpCapabilities | null;
 };
+export type AgentGatewayRoute = { policy_revision: string; role: string; model_alias: string; max_budget_usd: number; toolset: string };
+export type Agent = {
+  registration_id: string;
+  registration_version: string;
+  manifest_sha256: string;
+  component_id: string;
+  component_version: string;
+  lifecycle: string;
+  maturity: string;
+  execution_class: string;
+  owner: string;
+  capabilities: string[];
+  gateway_routes: AgentGatewayRoute[];
+};
+export type AgentInvocation = {
+  run_id: string;
+  root_run_id: string;
+  parent_run_id: string | null;
+  registration_id: string;
+  registration_version: string;
+  role: string;
+  run_lifecycle_status: string;
+  workflow_available?: boolean;
+  created_at: string;
+  updated_at: string;
+  gateway_route: AgentGatewayRoute | null;
+};
+export type AgentLifecycleTransition = { from_status: string | null; to_status: string | null; occurred_at: string };
+export type AgentMcpGrant = { server_id: string; server_version: string; server_manifest_sha256: string; tool_name: string; input_schema_sha256: string; repository_scope?: string | null };
+export type AgentInvocationDetail = AgentInvocation & {
+  mcp_grants: AgentMcpGrant[];
+  lifecycle_transitions: AgentLifecycleTransition[];
+  evidence: Record<"lifecycle" | "actual_cost" | "turns_used" | "result_artifact" | "failure_detail" | "mcp_invocation_outcome", "available" | "unavailable" | "redacted">;
+};
 
 export type ApiClient = {
   listProjects: (signal?: AbortSignal) => Promise<Project[]>;
@@ -80,6 +114,10 @@ export type ApiClient = {
   generateProductSpecification: (runId: string) => Promise<void>;
   selectProductSpecification: (run: Run) => Promise<void>;
   reviseProductSpecification: (run: Run, parent: { revision: number; artifactSha256: string }, specification: unknown) => Promise<void>;
+  listAgents: (options: { projectId: string; etag?: string; signal?: AbortSignal }) => Promise<{ agents: Agent[]; revision: string; etag: string | null; unchanged: boolean }>;
+  getAgent: (agent: Pick<Agent, "registration_id" | "registration_version">, projectId: string, signal?: AbortSignal) => Promise<Agent>;
+  listAgentInvocations: (agent: Pick<Agent, "registration_id" | "registration_version">, options: { projectId: string; etag?: string; signal?: AbortSignal }) => Promise<{ invocations: AgentInvocation[]; revision: string; etag: string | null; unchanged: boolean }>;
+  getAgentInvocation: (invocation: Pick<AgentInvocation, "run_id" | "role">, projectId: string, signal?: AbortSignal) => Promise<AgentInvocationDetail>;
 };
 
 const base = "/api/cogito/api/v1";
@@ -111,6 +149,25 @@ export const apiClient: ApiClient = {
     if (response.status === 304) return { runs: [], revision: etag ?? "", etag: response.headers.get("etag") ?? etag ?? null, unchanged: true };
     const body = await json(response);
     return { runs: body.items, revision: body.revision, etag: response.headers.get("etag"), unchanged: false };
+  },
+  async listAgents({ projectId, etag, signal }) {
+    const response = await fetch(`${base}/workbench/agents?project_id=${encodeURIComponent(projectId)}`, { headers: etag ? { "If-None-Match": etag } : {}, signal });
+    if (response.status === 304) return { agents: [], revision: etag ?? "", etag: response.headers.get("etag") ?? etag ?? null, unchanged: true };
+    const body = await json(response);
+    return { agents: body.items, revision: body.revision, etag: response.headers.get("etag"), unchanged: false };
+  },
+  async getAgent(agent, projectId, signal) {
+    return json(await fetch(`${base}/workbench/agents/${encodeURIComponent(agent.registration_id)}/${encodeURIComponent(agent.registration_version)}?project_id=${encodeURIComponent(projectId)}`, { signal }));
+  },
+  async listAgentInvocations(agent, { projectId, etag, signal }) {
+    const response = await fetch(`${base}/workbench/agents/${encodeURIComponent(agent.registration_id)}/${encodeURIComponent(agent.registration_version)}/invocations?project_id=${encodeURIComponent(projectId)}`, { headers: etag ? { "If-None-Match": etag } : {}, signal });
+    if (response.status === 304) return { invocations: [], revision: etag ?? "", etag: response.headers.get("etag") ?? etag ?? null, unchanged: true };
+    const body = await json(response);
+    return { invocations: body.items, revision: body.revision, etag: response.headers.get("etag"), unchanged: false };
+  },
+  async getAgentInvocation(invocation, projectId, signal) {
+    const query = new URLSearchParams({ project_id: projectId });
+    return json(await fetch(`${base}/workbench/agent-invocations/${encodeURIComponent(invocation.run_id)}/${encodeURIComponent(invocation.role)}?${query.toString()}`, { signal }));
   },
   async getRun(runId, signal) {
     return json(await fetch(`${base}/workbench/runs/${encodeURIComponent(runId)}`, { signal }));

@@ -181,6 +181,27 @@ test("sends ETags and cancellation signals on authoritative refreshes", async ()
   );
 });
 
+test("reads scoped Agent Operations through fixed relay paths and retains list ETags", async () => {
+  const fetchMock = jest
+    .fn<(url: string, options?: RequestInit) => Promise<Response>>()
+    .mockResolvedValueOnce({ ok: true, status: 200, headers: { get: () => '"agents-next"' }, json: async () => ({ items: [{ registration_id: "developer" }], revision: "agents-next" }) } as unknown as Response)
+    .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ registration_id: "developer", registration_version: "1.0.0" }) } as Response)
+    .mockResolvedValueOnce({ ok: true, status: 200, headers: { get: () => '"bindings-next"' }, json: async () => ({ items: [], revision: "bindings-next" }) } as unknown as Response)
+    .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ run_id: "run-1", role: "developer" }) } as Response);
+  global.fetch = fetchMock as unknown as typeof fetch;
+  const agent = { registration_id: "developer", registration_version: "1.0.0" };
+
+  await apiClient.listAgents({ projectId: "default", etag: '"agents-old"' });
+  await apiClient.getAgent(agent, "default");
+  await apiClient.listAgentInvocations(agent, { projectId: "default", etag: '"bindings-old"' });
+  await apiClient.getAgentInvocation({ run_id: "run-1", role: "developer" }, "default");
+
+  expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/cogito/api/v1/workbench/agents?project_id=default", expect.objectContaining({ headers: { "If-None-Match": '"agents-old"' } }));
+  expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/cogito/api/v1/workbench/agents/developer/1.0.0?project_id=default", { signal: undefined });
+  expect(fetchMock).toHaveBeenNthCalledWith(3, "/api/cogito/api/v1/workbench/agents/developer/1.0.0/invocations?project_id=default", expect.objectContaining({ headers: { "If-None-Match": '"bindings-old"' } }));
+  expect(fetchMock).toHaveBeenNthCalledWith(4, "/api/cogito/api/v1/workbench/agent-invocations/run-1/developer?project_id=default", { signal: undefined });
+});
+
 test("retains the cached ETag when a 304 response omits one", async () => {
   global.fetch = jest.fn(async () => (
     { ok: false, status: 304, headers: { get: () => null } } as unknown as Response

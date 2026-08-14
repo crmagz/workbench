@@ -16,7 +16,7 @@ const events: TimelineEvent[] = [{ event_id: "event-1", event_type: "plan.awaiti
 const mcpGrant = { role: "developer", server_id: "github_readonly_mcp", server_version: "1.0.0", server_manifest_sha256: "b".repeat(64), tool_name: "catalog_read", input_schema_sha256: "c".repeat(64), repository_scope: "acme/api-gateway" };
 
 function client(overrides: Partial<ApiClient> = {}): ApiClient {
-  return { listProjects: async () => [{ project_id: "default" }], getHealth: async () => true, listRuns: async () => ({ runs: [run], revision: "runs", etag: "runs", unchanged: false }), getRun: async () => run, getTimeline: async () => ({ events, revision: "timeline", etag: "timeline", unchanged: false }), getEvidence: async () => ({ content: '{"title":"verified"}', sha256: digest }), getFeedback: async () => [], recordFeedback: async () => ({ feedback_id: "feedback-1", run_id: run.run_id, intent: "note", artifact_sha256: digest, stage_id: "planning", actor_id: "operator", comment: "Recorded note", created_at: "2026-08-02T00:00:00Z" }), decide: async () => undefined, generateProductSpecification: async () => undefined, selectProductSpecification: async () => undefined, reviseProductSpecification: async () => undefined, ...overrides };
+  return { listProjects: async () => [{ project_id: "default" }], getHealth: async () => true, listRuns: async () => ({ runs: [run], revision: "runs", etag: "runs", unchanged: false }), getRun: async () => run, getTimeline: async () => ({ events, revision: "timeline", etag: "timeline", unchanged: false }), getEvidence: async () => ({ content: '{"title":"verified"}', sha256: digest }), getFeedback: async () => [], recordFeedback: async () => ({ feedback_id: "feedback-1", run_id: run.run_id, intent: "note", artifact_sha256: digest, stage_id: "planning", actor_id: "operator", comment: "Recorded note", created_at: "2026-08-02T00:00:00Z" }), decide: async () => undefined, generateProductSpecification: async () => undefined, selectProductSpecification: async () => undefined, reviseProductSpecification: async () => undefined, listAgents: async () => ({ agents: [], revision: "agents", etag: "agents", unchanged: false }), getAgent: async () => { throw new Error("agent unavailable"); }, listAgentInvocations: async () => ({ invocations: [], revision: "invocations", etag: "invocations", unchanged: false }), getAgentInvocation: async () => { throw new Error("invocation unavailable"); }, ...overrides };
 }
 
 beforeEach(() => { window.history.replaceState({}, "", "/"); window.localStorage.clear(); });
@@ -28,6 +28,118 @@ test("migrates the legacy stored theme preference", async () => {
   expect(await screen.findByRole("heading", { name: "Mission Control" })).toBeVisible();
   expect(screen.getByRole("combobox", { name: "Theme" })).toHaveValue("dark");
   expect(window.localStorage.getItem("workbench-theme")).toBe("dark");
+});
+
+test("renders project-scoped agent operations without offering execution controls", async () => {
+  const agent = {
+    registration_id: "developer", registration_version: "1.0.0", manifest_sha256: "b".repeat(64), component_id: "developer", component_version: "1.0.0", lifecycle: "active", maturity: "active", execution_class: "adapter", owner: "cogito-platform", capabilities: ["develop"],
+    gateway_routes: [{ policy_revision: "gateway-v1", role: "developer", model_alias: "complex", max_budget_usd: 25, toolset: "development-restricted" }]
+  };
+  const binding = { run_id: "run-agent-1", root_run_id: run.run_id, parent_run_id: null, registration_id: "developer", registration_version: "1.0.0", role: "developer", run_lifecycle_status: "RUNNING", created_at: "2026-08-13T00:00:00Z", updated_at: "2026-08-13T00:01:00Z", gateway_route: agent.gateway_routes[0] };
+  const user = userEvent.setup();
+  render(<App client={client({
+    listAgents: async () => ({ agents: [agent], revision: "agents", etag: "agents", unchanged: false }),
+    getAgent: async () => agent,
+    listAgentInvocations: async () => ({ invocations: [binding], revision: "bindings", etag: "bindings", unchanged: false }),
+    getAgentInvocation: async () => { throw new Error("workflow navigation does not fetch an invocation detail"); }
+  })} />);
+
+  await user.click(await screen.findByRole("button", { name: "Agents" }));
+  expect(await screen.findByRole("heading", { name: "Agent Operations" })).toBeVisible();
+  expect(screen.getByRole("button", { name: "Move Role / toolset column" })).toBeVisible();
+  expect(screen.getByRole("button", { name: "Move Capabilities column" })).toBeVisible();
+  expect(screen.getByRole("button", { name: "Move Owner column" })).toBeVisible();
+  expect(screen.getByRole("button", { name: "Move Model column" })).toBeVisible();
+  expect(screen.getByRole("button", { name: "Move Budget column" })).toBeVisible();
+  expect(screen.getByText(/Root-run lifecycle is authoritative/)).toBeVisible();
+  expect(screen.getByRole("button", { name: "Create Agent" })).toBeDisabled();
+
+  const budgetColumn = screen.getByRole("button", { name: "Move Budget column" });
+  fireEvent.dragStart(budgetColumn);
+  fireEvent.dragOver(screen.getByRole("button", { name: "Move Owner column" }));
+  fireEvent.drop(screen.getByRole("button", { name: "Move Owner column" }));
+  expect(document.querySelector(".agent-release-columns")?.textContent?.indexOf("Budget")).toBeLessThan(document.querySelector(".agent-release-columns")?.textContent?.indexOf("Owner") ?? -1);
+
+  await user.click(screen.getByRole("button", { name: "Customize catalog columns" }));
+  expect(screen.getByRole("dialog", { name: "Catalog columns" })).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "Toggle catalog column Owner" }));
+  expect(screen.getByRole("button", { name: "Toggle catalog column Owner" })).toHaveAttribute("aria-pressed", "false");
+  expect(screen.queryByRole("button", { name: "Move Owner column" })).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Show all" }));
+  expect(screen.getByRole("button", { name: "Toggle catalog column Owner" })).toHaveAttribute("aria-pressed", "true");
+  await user.click(screen.getByRole("button", { name: "Customize catalog columns" }));
+  expect(screen.getByRole("button", { name: "Move Owner column" })).toBeVisible();
+  await user.click(screen.getByRole("button", { name: /Open workflow for developer running invocation/i }));
+  expect(window.location.pathname).toBe(`/workflows/${run.run_id}`);
+  expect(await screen.findByRole("button", { name: "Focus Specification" })).toBeVisible();
+});
+
+test("opens the originating workflow from an immutable agent invocation", async () => {
+  const developer = { registration_id: "developer", registration_version: "1.0.0", manifest_sha256: "b".repeat(64), component_id: "developer", component_version: "1.0.0", lifecycle: "active", maturity: "active", execution_class: "adapter", owner: "cogito-platform", capabilities: ["develop"], gateway_routes: [{ policy_revision: "gateway-v1", role: "developer", model_alias: "complex", max_budget_usd: 25, toolset: "development-restricted" }] };
+  const binding = { run_id: "run-agent-1", root_run_id: run.run_id, parent_run_id: null, registration_id: "developer", registration_version: "1.0.0", role: "developer", run_lifecycle_status: "RUNNING", created_at: "2026-08-13T00:00:00Z", updated_at: "2026-08-13T00:01:00Z", gateway_route: developer.gateway_routes[0] };
+  const user = userEvent.setup();
+  render(<App client={client({
+    listAgents: async () => ({ agents: [developer], revision: "agents", etag: "agents", unchanged: false }),
+    getAgent: async () => developer,
+    listAgentInvocations: async () => ({ invocations: [binding], revision: "bindings", etag: "bindings", unchanged: false }),
+    getAgentInvocation: async () => { throw new Error("workflow navigation does not fetch an invocation detail"); }
+  })} />);
+
+  await user.click(await screen.findByRole("button", { name: "Agents" }));
+  await user.click(await screen.findByRole("button", { name: /Open workflow for developer running invocation/i }));
+
+  expect(window.location.pathname).toBe(`/workflows/${run.run_id}`);
+  expect(await screen.findByRole("button", { name: "Focus Specification" })).toBeVisible();
+});
+
+test("opening an agent invocation replaces a previously selected workflow", async () => {
+  const secondRun: Run = { ...run, run_id: "run-87654321", workflow_id: "planning-run-43-revision-1" };
+  const developer = { registration_id: "developer", registration_version: "1.0.0", manifest_sha256: "b".repeat(64), component_id: "developer", component_version: "1.0.0", lifecycle: "active", maturity: "active", execution_class: "adapter", owner: "cogito-platform", capabilities: ["develop"], gateway_routes: [{ policy_revision: "gateway-v1", role: "developer", model_alias: "complex", max_budget_usd: 25, toolset: "development-restricted" }] };
+  const binding = { run_id: "run-agent-2", root_run_id: secondRun.run_id, parent_run_id: null, registration_id: "developer", registration_version: "1.0.0", role: "developer", run_lifecycle_status: "RUNNING", created_at: "2026-08-13T00:00:00Z", updated_at: "2026-08-13T00:01:00Z", gateway_route: developer.gateway_routes[0] };
+  const user = userEvent.setup();
+  render(<App client={client({
+    listRuns: async () => ({ runs: [run, secondRun], revision: "runs", etag: "runs", unchanged: false }),
+    getRun: async (runId) => runId === secondRun.run_id ? secondRun : run,
+    listAgents: async () => ({ agents: [developer], revision: "agents", etag: "agents", unchanged: false }),
+    getAgent: async () => developer,
+    listAgentInvocations: async () => ({ invocations: [binding], revision: "bindings", etag: "bindings", unchanged: false })
+  })} />);
+
+  await user.click(await screen.findByText(run.workflow_id!));
+  expect(await screen.findByRole("heading", { name: run.workflow_id! })).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "Agents" }));
+  await user.click(await screen.findByRole("button", { name: /Open workflow for developer running invocation/i }));
+
+  expect(window.location.pathname).toBe(`/workflows/${secondRun.run_id}`);
+  expect(await screen.findByRole("heading", { name: secondRun.workflow_id! })).toBeVisible();
+});
+
+test("renders safe role pins without replacing the originating workflow action", async () => {
+  const developer = { registration_id: "developer", registration_version: "1.0.0", manifest_sha256: "b".repeat(64), component_id: "developer", component_version: "1.0.0", lifecycle: "active", maturity: "active", execution_class: "adapter", owner: "cogito-platform", capabilities: ["develop"], gateway_routes: [{ policy_revision: "gateway-v1", role: "developer", model_alias: "complex", max_budget_usd: 25, toolset: "development-restricted" }] };
+  const binding = { run_id: "run-agent-3", root_run_id: run.run_id, parent_run_id: null, registration_id: "developer", registration_version: "1.0.0", role: "developer", run_lifecycle_status: "RUNNING", workflow_available: false, created_at: "2026-08-13T00:00:00Z", updated_at: "2026-08-13T00:01:00Z", gateway_route: developer.gateway_routes[0] };
+  const user = userEvent.setup();
+  render(<App client={client({
+    listAgents: async () => ({ agents: [developer], revision: "agents", etag: "agents", unchanged: false }),
+    getAgent: async () => developer,
+    listAgentInvocations: async () => ({ invocations: [binding], revision: "bindings", etag: "bindings", unchanged: false }),
+    getAgentInvocation: async () => ({ ...binding, mcp_grants: [{ server_id: "catalog", server_version: "1.0.0", server_manifest_sha256: "c".repeat(64), tool_name: "read", input_schema_sha256: "d".repeat(64), repository_scope: null }], lifecycle_transitions: [], evidence: { lifecycle: "available", actual_cost: "unavailable", turns_used: "unavailable", result_artifact: "redacted", failure_detail: "redacted", mcp_invocation_outcome: "unavailable" } })
+  })} />);
+
+  await user.click(await screen.findByRole("button", { name: "Agents" }));
+  await user.click(await screen.findByRole("button", { name: /View role pins for developer run-agent-3/i }));
+
+  expect(await screen.findByRole("heading", { name: /developer.*v1\.0\.0/i })).toBeVisible();
+  expect(screen.getByText("catalog")).toBeVisible();
+  expect(screen.getByText(/v1\.0\.0.*read/i)).toBeVisible();
+  expect(screen.getByText("Workflow view unavailable")).toBeVisible();
+  expect(screen.queryByRole("button", { name: /Open workflow for developer running invocation/i })).not.toBeInTheDocument();
+});
+
+test("restores Agent Operations after a browser refresh on its addressable route", async () => {
+  window.history.replaceState({}, "", "/agents");
+  render(<App client={client()} />);
+
+  expect(await screen.findByRole("heading", { name: "Agent Operations" })).toBeVisible();
 });
 
 test("presents Mission Control with filterable authoritative workflow identity", async () => {
