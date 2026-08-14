@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, jest } from "@jest/globals";
 
 import { App } from "./App";
-import type { ApiClient, Run, TimelineEvent } from "./client";
+import type { AgentInvocationDetail, ApiClient, Run, TimelineEvent } from "./client";
 
 const digest = "a".repeat(64);
 const stages: Run["stages"] = [{ stage_id: "specification", label: "Specification", state: "completed", availability: "authoritative", reason: "Specification stored.", artifact_kind: "source" }, { stage_id: "planning", label: "Planning", state: "completed", availability: "authoritative", reason: "Plan generated.", artifact_kind: "plan" }, { stage_id: "plan_approval", label: "Plan approval", state: "awaiting_operator", availability: "authoritative", reason: "Decision required.", artifact_kind: "plan" }, { stage_id: "implementation", label: "Implementation", state: "unavailable", availability: "unavailable", reason: "Not started.", artifact_kind: null }, { stage_id: "implementation_approval", label: "Implementation approval", state: "unavailable", availability: "unavailable", reason: "Not started.", artifact_kind: null }];
@@ -133,6 +133,28 @@ test("renders safe role pins without replacing the originating workflow action",
   expect(screen.getByText(/v1\.0\.0.*read/i)).toBeVisible();
   expect(screen.getByText("Workflow view unavailable")).toBeVisible();
   expect(screen.queryByRole("button", { name: /Open workflow for developer running invocation/i })).not.toBeInTheDocument();
+});
+
+test("clears a role-pin error after a later successful inspection", async () => {
+  const developer = { registration_id: "developer", registration_version: "1.0.0", manifest_sha256: "b".repeat(64), component_id: "developer", component_version: "1.0.0", lifecycle: "active", maturity: "active", execution_class: "adapter", owner: "cogito-platform", capabilities: ["develop"], gateway_routes: [{ policy_revision: "gateway-v1", role: "developer", model_alias: "complex", max_budget_usd: 25, toolset: "development-restricted" }] };
+  const binding = { run_id: "run-agent-retry", root_run_id: run.run_id, parent_run_id: null, registration_id: "developer", registration_version: "1.0.0", role: "developer", run_lifecycle_status: "RUNNING", workflow_available: false, created_at: "2026-08-13T00:00:00Z", updated_at: "2026-08-13T00:01:00Z", gateway_route: developer.gateway_routes[0] };
+  const detail: AgentInvocationDetail = { run_id: binding.run_id, root_run_id: binding.root_run_id, parent_run_id: binding.parent_run_id, registration_id: binding.registration_id, registration_version: binding.registration_version, role: binding.role, run_lifecycle_status: "RUNNING", workflow_available: false, created_at: binding.created_at, updated_at: binding.updated_at, gateway_route: binding.gateway_route, mcp_grants: [], lifecycle_transitions: [], evidence: { lifecycle: "available", actual_cost: "unavailable", turns_used: "unavailable", result_artifact: "redacted", failure_detail: "redacted", mcp_invocation_outcome: "unavailable" } };
+  let attempts = 0;
+  const user = userEvent.setup();
+  render(<App client={client({
+    listAgents: async () => ({ agents: [developer], revision: "agents", etag: "agents", unchanged: false }),
+    getAgent: async () => developer,
+    listAgentInvocations: async () => ({ invocations: [binding], revision: "bindings", etag: "bindings", unchanged: false }),
+    getAgentInvocation: async () => { attempts += 1; if (attempts === 1) throw new Error("temporary"); return detail; }
+  })} />);
+
+  await user.click(await screen.findByRole("button", { name: "Agents" }));
+  const inspect = await screen.findByRole("button", { name: /View role pins for developer run-agent-retry/i });
+  await user.click(inspect);
+  expect(await screen.findByText("Invocation role pins are temporarily unavailable.")).toBeVisible();
+  await user.click(inspect);
+  expect(await screen.findByText("Showing safe immutable role pins.")).toBeVisible();
+  expect(screen.queryByText("Invocation role pins are temporarily unavailable.")).not.toBeInTheDocument();
 });
 
 test("restores Agent Operations after a browser refresh on its addressable route", async () => {
@@ -623,6 +645,23 @@ test("does not poll the inbox while a selected detail has its own canonical refr
     expect(listRuns).toHaveBeenCalledTimes(1);
     expect(getRun).toHaveBeenCalledTimes(2);
     expect(getTimeline).toHaveBeenCalledTimes(2);
+  } finally { jest.useRealTimers(); }
+});
+
+test("stops workflow polling while Agent Operations is open", async () => {
+  jest.useFakeTimers();
+  try {
+    const user = userEvent.setup({ advanceTimers: jest.advanceTimersByTime });
+    const getRun = jest.fn<ApiClient["getRun"]>().mockResolvedValue(run);
+    render(<App client={client({ getRun })} />);
+
+    await user.click(await screen.findByText("run-12345678"));
+    expect(await screen.findByRole("heading", { name: "planning-run-42-revision-1" })).toBeVisible();
+    expect(getRun).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole("button", { name: "Agents" }));
+    expect(await screen.findByRole("heading", { name: "Agent Operations" })).toBeVisible();
+    await act(async () => { await jest.advanceTimersByTimeAsync(3_000); });
+    expect(getRun).toHaveBeenCalledTimes(1);
   } finally { jest.useRealTimers(); }
 });
 
