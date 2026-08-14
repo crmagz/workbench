@@ -142,18 +142,17 @@ test("records an explicit empty MCP selection through the deployed Kind Workbenc
 
     await page.goto(`${origin}/workflows/${encodeURIComponent(mcpWaitingPlanRunId)}`);
     await expect(page.getByRole("button", { name: "Focus Plan approval" })).toHaveAttribute("aria-pressed", "true");
-    await expect(page.getByRole("group", { name: "Governed MCP capability selection" })).toBeVisible();
-    await page.getByRole("checkbox", { name: "Approve with no MCP tools" }).check();
+    await expect(page.getByLabel("Governed MCP capability evidence")).toBeVisible();
     await page.getByRole("button", { name: "Approve" }).click();
 
     await expect(page.getByText("Decision accepted; canonical state has been refreshed.")).toBeVisible();
-    await expect(page.getByText("No MCP tools were selected.")).toBeVisible();
+    await expect(page.getByText("All pinned capability grants were retained.")).toBeVisible();
     await expect.poll(async () => {
       const response = await page.request.get(`${origin}/api/cogito/api/v1/workbench/runs/${encodeURIComponent(mcpWaitingPlanRunId)}`);
       if (!response.ok()) return null;
       const body = await response.json();
       return body.mcp_capabilities?.selected_grants;
-    }).toEqual([]);
+    }).toBeNull();
   } finally {
     await close(server);
   }

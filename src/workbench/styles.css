@@ -23,9 +23,7 @@
 .decision-panel .form-textarea { min-height:96px; margin:0; padding:11px 12px; }
 .decision-actions .button-primary { border-color:var(--border-accent); color:var(--accent); background:rgba(0,212,255,.09); }
 .decision-actions .button-secondary { border-color:var(--border); color:var(--fg-subtle); background:var(--surface); }
-.mcp-selector,.mcp-capabilities { margin-top:16px; padding:14px; border:1px solid var(--border); border-radius:10px; background:rgba(0,212,255,.035); }
-.mcp-selector legend { padding:0 5px; color:var(--fg); font-size:13px; font-weight:600; }
-.mcp-empty-choice,.mcp-grant-list label { display:block; padding:8px 0; color:var(--fg-subtle); font-size:12px; }
+.mcp-capabilities { margin-top:16px; padding:14px; border:1px solid var(--border); border-radius:10px; background:rgba(0,212,255,.035); }
 .mcp-grant-list { margin:10px 0 0; padding:0; list-style:none; border-top:1px solid var(--border); }
 .mcp-grant-list li { padding:8px 0; border-bottom:1px solid var(--border); color:var(--fg-subtle); font:11px "JetBrains Mono",ui-monospace,monospace; }
 .mcp-selection-summary { color:var(--fg); font-size:12px; }

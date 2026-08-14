@@ -155,7 +155,9 @@ export const apiClient: ApiClient = {
     if (!artifact) throw new Error("The authoritative decision artifact is unavailable");
     const canonicalSelection = mcpSelection === undefined ? undefined : mcpSelection === null ? null : [...mcpSelection]
       .sort((left, right) => mcpSelectionKey(left).localeCompare(mcpSelectionKey(right)));
-    const fingerprint = `${run.run_id}:${run.active_gate}:${artifact.sha256}:${decision}:${canonicalSelection === undefined ? "omitted" : canonicalSelection === null ? "null" : JSON.stringify(canonicalSelection)}`;
+    const selectionFingerprint = canonicalSelection === undefined ? "omitted" : canonicalSelection === null ? "null" : canonicalSelection
+      .map((grant) => mcpSelectionKey(grant)).join("|");
+    const fingerprint = `${run.run_id}:${run.active_gate}:${artifact.sha256}:${decision}:${selectionFingerprint}`;
     const idempotencyKey = inFlightDecisionKeys.get(fingerprint) ?? crypto.randomUUID();
     inFlightDecisionKeys.set(fingerprint, idempotencyKey);
     const body: { decision: typeof decision; artifact_sha256: string; comment?: string; mcp_selection?: McpToolSelection[] | null } = { decision, artifact_sha256: artifact.sha256, comment };
