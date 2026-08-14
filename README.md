@@ -136,6 +136,24 @@ COGITO_KIND_E2E_DECISION=request_revision \
 npm run test:e2e:kind
 ```
 
+To exercise the Agent Operations read-only path against a retained scoped
+agent-run binding, add these values to the read-only command above:
+
+```sh
+COGITO_E2E_AGENT_PROJECT_ID=<project-id> \
+COGITO_E2E_AGENT_REGISTRATION_ID=<registration-id> \
+COGITO_E2E_AGENT_REGISTRATION_VERSION=<registration-version> \
+COGITO_E2E_AGENT_RUN_ID=<agent-run-id> \
+COGITO_E2E_AGENT_ROLE=<role> \
+COGITO_E2E_AGENT_WORKFLOW_RUN_ID=<originating-workflow-flow-id> \
+npm run test:e2e:kind
+```
+
+The agent run must have an immutable `root_run_id` matching the supplied
+workflow Flow ID. This validates the catalog, pinned route, and the audit link
+from the invocation back to its originating workflow. It does not invoke an
+agent, mutate a run, or expose raw execution material.
+
 Use a separate terminal for the local API forwarding command shown above. The
 test never reads cluster credentials or passes the relay token to browser
 JavaScript. The mutable command requests a revision and therefore changes the

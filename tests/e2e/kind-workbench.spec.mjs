@@ -15,6 +15,12 @@ const planArtifactSha256 = process.env.COGITO_E2E_PLAN_SHA256;
 const mcpWaitingPlanRunId = process.env.COGITO_E2E_MCP_WAITING_PLAN_RUN_ID;
 const mcpPlanArtifactSha256 = process.env.COGITO_E2E_MCP_PLAN_SHA256;
 const decision = process.env.COGITO_KIND_E2E_DECISION;
+const agentProjectId = process.env.COGITO_E2E_AGENT_PROJECT_ID;
+const agentRegistrationId = process.env.COGITO_E2E_AGENT_REGISTRATION_ID;
+const agentRegistrationVersion = process.env.COGITO_E2E_AGENT_REGISTRATION_VERSION;
+const agentRunId = process.env.COGITO_E2E_AGENT_RUN_ID;
+const agentRole = process.env.COGITO_E2E_AGENT_ROLE;
+const agentWorkflowRunId = process.env.COGITO_E2E_AGENT_WORKFLOW_RUN_ID;
 
 if (decision && !["request_revision", "approve_no_mcp"].includes(decision)) {
   throw new Error("COGITO_KIND_E2E_DECISION must be request_revision or approve_no_mcp");
@@ -96,6 +102,40 @@ test("records a non-executable note against a real source specification", async 
     await page.getByRole("button", { name: "Record context" }).click();
     await expect(page.getByText(/use Request revision when the work itself needs to change/)).toBeVisible();
     await expect(page.getByText(/Kind browser validation note\./)).toBeVisible();
+  } finally {
+    await close(server);
+  }
+});
+
+test("renders real Kind-backed Agent Operations without raw execution evidence", async ({ page }) => {
+  const required = [agentProjectId, agentRegistrationId, agentRegistrationVersion, agentRunId, agentRole, agentWorkflowRunId];
+  test.skip(required.some((value) => !value), "set COGITO_E2E_AGENT_PROJECT_ID, COGITO_E2E_AGENT_REGISTRATION_ID, COGITO_E2E_AGENT_REGISTRATION_VERSION, COGITO_E2E_AGENT_RUN_ID, COGITO_E2E_AGENT_ROLE, and COGITO_E2E_AGENT_WORKFLOW_RUN_ID");
+  if (!upstreamUrl || !token) {
+    throw new Error("COGITO_E2E_UPSTREAM_URL and COGITO_E2E_UPSTREAM_TOKEN are required");
+  }
+  const { server, origin } = await startWorkbenchRelay();
+  try {
+    await page.goto(origin);
+    await page.getByRole("combobox", { name: "Active project" }).selectOption(agentProjectId);
+    const history = page.waitForResponse((response) => response.url().includes(`/workbench/agents/${encodeURIComponent(agentRegistrationId)}/${encodeURIComponent(agentRegistrationVersion)}/invocations?project_id=${encodeURIComponent(agentProjectId)}`));
+    await page.getByRole("button", { name: "Agents" }).click();
+    await expect(page.getByRole("heading", { name: "Agent Operations" })).toBeVisible();
+    await expect(page.getByRole("button", { name: new RegExp(`${agentRegistrationId}.*v${agentRegistrationVersion}`) })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Move Budget column" })).toBeVisible();
+    expect((await history).status()).toBe(200);
+
+    const invocationDetail = page.waitForResponse((response) => response.url().includes(`/workbench/agent-invocations/${encodeURIComponent(agentRunId)}/${encodeURIComponent(agentRole)}?project_id=${encodeURIComponent(agentProjectId)}`));
+    await page.getByRole("button", { name: new RegExp(`View role pins for ${agentRole}.*${agentRunId.slice(0, 8)}`) }).click();
+    await expect(page.getByRole("heading", { name: new RegExp(`${agentRole}.*v${agentRegistrationVersion}`) })).toBeVisible();
+    const invocation = await invocationDetail;
+    expect(invocation.status()).toBe(200);
+    const invocationBody = await invocation.json();
+    expect(invocationBody.mcp_grants).toBeDefined();
+    expect(Object.keys(invocationBody)).not.toEqual(expect.arrayContaining(["worker_id", "trace_id", "execution_uri", "actual_cost", "turns_used"]));
+
+    await page.getByRole("button", { name: new RegExp(`Open workflow for ${agentRole}.*${agentWorkflowRunId.slice(0, 8)}`) }).click();
+    await expect(page).toHaveURL(new RegExp(`/workflows/${agentWorkflowRunId}`));
+    await expect(page.getByRole("button", { name: "Focus Specification" })).toBeVisible();
   } finally {
     await close(server);
   }

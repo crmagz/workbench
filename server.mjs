@@ -7,6 +7,8 @@ const DEFAULT_UPSTREAM_TIMEOUT_MS = 10_000;
 const allowed = [
   { method: "GET", path: /^\/healthz$/ },
   { method: "GET", path: /^\/api\/v1\/workbench\/projects$/ },
+  { method: "GET", path: /^\/api\/v1\/workbench\/agents(?:\/[^/]+\/[^/]+(?:\/invocations)?)?$/ },
+  { method: "GET", path: /^\/api\/v1\/workbench\/agent-invocations\/[^/]+\/[^/]+$/ },
   { method: "POST", path: /^\/api\/v1\/planning-runs\/[^/]+\/(?:generate-product-specification|select-product-specification|revise-product-specification)$/ },
   { method: "GET", path: /^\/api\/v1\/workbench\/runs(?:\/[^/]+(?:\/(?:timeline|evidence\/(?:source|product_specification|plan|implementation)))?)?$/ },
   { method: "GET", path: /^\/api\/v1\/workbench\/runs\/[^/]+\/feedback$/ },
