@@ -142,10 +142,10 @@ JavaScript. The mutable command requests a revision and therefore changes the
 specified disposable run.
 
 To validate the governed MCP approval cockpit, use a different disposable run
-whose waiting plan has server-pinned MCP grants. This action explicitly records
-an empty MCP selection, so the run may proceed into implementation. The test
-verifies the rendered approval evidence, submits the selection through the
-deployed Workbench, and confirms that the API records `selected_grants: []`:
+whose waiting plan has server-pinned MCP grants. This action approves the plan
+with its inherited pinned workflow authority. The test verifies the rendered
+authority evidence, submits approval through the deployed Workbench, and
+confirms that the API records `selected_grants: null` (all pins retained):
 
 ```sh
 COGITO_KIND_E2E=1 \

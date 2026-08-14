@@ -18,9 +18,11 @@ function isDisplaySafeCapabilities(value: McpCapabilities | null | undefined): v
   if (!value) return false;
   if (!["awaiting_plan_approval", "approved", "not_applicable"].includes(value.state) || !Array.isArray(value.pinned_grants)
     || !value.pinned_grants.every(isDisplaySafeGrant) || ![true, false].includes(value.invocation_evidence_available)) return false;
+  if (new Set(value.pinned_grants.map(mcpSelectionKey)).size !== value.pinned_grants.length) return false;
   if (value.selected_grants === null) return true;
   return Array.isArray(value.selected_grants)
     && value.selected_grants.every(isDisplaySafeGrant)
+    && new Set(value.selected_grants.map(mcpSelectionKey)).size === value.selected_grants.length
     && value.selected_grants.every((grant) => value.pinned_grants.some((pin) => mcpSelectionKey(pin) === mcpSelectionKey(grant)));
 }
 
