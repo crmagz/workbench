@@ -141,7 +141,7 @@ function AgentOperations({ client, projectId, onOpenWorkflow }: { client: ApiCli
   </section>;
 }
 
-type ProductPlanPhase = { id: string; name: string; description: string; acceptanceCriteria: string[] };
+type ProductPlanPhase = { id: string; name: string; description: string; acceptanceCriteria: string[]; requirementIds: string[]; verificationReferences: string[]; riskNotes: string[]; rollbackNotes: string[] };
 type ProductPlan = { title: string; summary: string; phases: ProductPlanPhase[] };
 function isRecord(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }
 function productPlan(content: string, artifact: Artifact | null): ProductPlan | null {
@@ -151,7 +151,8 @@ function productPlan(content: string, artifact: Artifact | null): ProductPlan | 
     if (!isRecord(parsed) || typeof parsed.title !== "string" || typeof parsed.summary !== "string" || !Array.isArray(parsed.phases)) return null;
     const phases = parsed.phases.flatMap((value): ProductPlanPhase[] => {
       if (!isRecord(value) || typeof value.id !== "string" || typeof value.name !== "string" || typeof value.description !== "string" || !Array.isArray(value.acceptance_criteria) || !value.acceptance_criteria.every((criterion) => typeof criterion === "string")) return [];
-      return [{ id: value.id, name: value.name, description: value.description, acceptanceCriteria: value.acceptance_criteria }];
+      const strings = (field: string) => Array.isArray(value[field]) && value[field].every((item) => typeof item === "string") ? value[field] as string[] : [];
+      return [{ id: value.id, name: value.name, description: value.description, acceptanceCriteria: value.acceptance_criteria, requirementIds: strings("requirement_ids"), verificationReferences: strings("verification_references"), riskNotes: strings("risk_notes"), rollbackNotes: strings("rollback_notes") }];
     });
     return { title: parsed.title, summary: parsed.summary, phases };
   } catch { return null; }
@@ -159,7 +160,7 @@ function productPlan(content: string, artifact: Artifact | null): ProductPlan | 
 function ProductPlanSummary({ content, artifact }: { content: string; artifact: Artifact | null }) {
   const plan = productPlan(content, artifact);
   if (!plan) return null;
-  return <section className="card dossier-section plan-summary" aria-labelledby="verified-plan-summary-title"><h3 id="verified-plan-summary-title" className="panel-title">Verified plan summary</h3><div className="dossier-section-body"><h4>{plan.title}</h4><p className="dossier-description">{plan.summary}</p><div className="timeline">{plan.phases.map((phase) => <div className="tl-item" key={phase.id}><i /><span><b>{phase.name}</b><small>{phase.description}</small>{phase.acceptanceCriteria.length > 0 && <small>Acceptance: {phase.acceptanceCriteria.join(" · ")}</small>}</span></div>)}</div></div></section>;
+  return <section className="card dossier-section plan-summary" aria-labelledby="verified-plan-summary-title"><h3 id="verified-plan-summary-title" className="panel-title">Verified plan summary</h3><div className="dossier-section-body"><h4>{plan.title}</h4><p className="dossier-description">{plan.summary}</p><div className="timeline">{plan.phases.map((phase) => <div className="tl-item" key={phase.id}><i /><span><b>{phase.name}</b><small>{phase.description}</small>{phase.requirementIds.length > 0 && <small>Requirements: {phase.requirementIds.join(" · ")}</small>}{phase.acceptanceCriteria.length > 0 && <small>Acceptance: {phase.acceptanceCriteria.join(" · ")}</small>}{phase.verificationReferences.length > 0 && <small>Verification: {phase.verificationReferences.join(" · ")}</small>}{phase.riskNotes.length > 0 && <small>Risks: {phase.riskNotes.join(" · ")}</small>}{phase.rollbackNotes.length > 0 && <small>Rollback: {phase.rollbackNotes.join(" · ")}</small>}</span></div>)}</div></div></section>;
 }
 
 function prettyEvidence(content: string) {
@@ -205,6 +206,7 @@ function ProductSpecificationControls({ client, run, onComplete }: { client: Api
   const [notice, setNotice] = useState<string | null>(null);
   const [revisionText, setRevisionText] = useState("");
   const [editorOpen, setEditorOpen] = useState(false);
+  const [waiverRationale, setWaiverRationale] = useState("");
   const [revisionParent, setRevisionParent] = useState<{ revision: number; artifactSha256: string } | null>(null);
   const artifact = evidenceFor(run, "product_specification");
   const selected = run.selected_product_specification_revision !== null && run.selected_product_specification_revision !== undefined;
@@ -244,7 +246,8 @@ function ProductSpecificationControls({ client, run, onComplete }: { client: Api
     {mutable && artifact && !hasMutableRevision && <p className="control-note">The displayed product specification revision is unavailable. Refresh the run before editing or selecting it.</p>}
     {mutable && !artifact && <button className="button-primary" disabled={pending} aria-busy={pending} onClick={() => void act(() => client.generateProductSpecification(run.run_id), "Draft generated. Review its verified evidence before evaluation.")}>{pending ? "Generating…" : "Generate product specification"}</button>}
     {mutable && artifact && !run.specification_evaluation_readiness && <button className="button-primary" disabled={pending} aria-busy={pending} onClick={() => void act(() => client.evaluateProductSpecification(run.run_id), "Evaluation recorded. Review its readiness before selecting this specification.")}>{pending ? "Evaluating…" : "Evaluate product specification"}</button>}
-    {run.specification_evaluation_readiness === "needs_revision" && <p className="evidence-error" role="alert">Evaluation requires a revised product specification before planning can continue.</p>}
+    {run.specification_evaluation_readiness === "needs_revision" && <><p className="evidence-error" role="alert">Evaluation requires a revised product specification before planning can continue, unless an authorized operator records an explicit exception.</p><label className="form-field" htmlFor="evaluation-waiver-rationale"><span>Waiver rationale</span><textarea id="evaluation-waiver-rationale" className="form-textarea" value={waiverRationale} onChange={(event) => setWaiverRationale(event.target.value)} maxLength={2000} placeholder="Explain why the evaluation finding is accepted…" /></label><div className="form-actions"><button className="button-secondary" disabled={pending || !waiverRationale.trim()} aria-busy={pending} onClick={() => void act(() => client.waiveSpecificationEvaluation(run, waiverRationale), "Evaluation waiver recorded. Review and select this specification before planning.")}>{pending ? "Recording…" : "Record evaluation waiver"}</button></div></>}
+    {run.specification_evaluation_readiness === "waived" && <p className="sync-row" role="status">An authorized evaluation waiver is recorded for this specification. Its immutable audit event is available in the evaluation history.</p>}
     {mutable && artifact && hasMutableRevision && !editorOpen && <button className="button-secondary" disabled={pending} aria-busy={pending} onClick={() => void beginRevision()}>{pending ? "Loading revision…" : "Edit product specification"}</button>}
     {mutable && artifact && hasMutableRevision && !selected && (run.specification_evaluation_readiness === "ready" || run.specification_evaluation_readiness === "waived") && <button className="button-primary" disabled={pending} aria-busy={pending} onClick={() => void act(() => client.selectProductSpecification(run), "Product specification selected for planning.")}>{pending ? "Selecting…" : "Select product specification"}</button>}
     {editorOpen && mutable && <><label className="form-field" htmlFor="product-specification-revision"><span>Complete product specification JSON</span><textarea id="product-specification-revision" className="form-textarea" value={revisionText} onChange={(event) => setRevisionText(event.target.value)} aria-describedby="product-specification-revision-help" /></label><p id="product-specification-revision-help" className="form-help">The complete request is limited to 96 KiB, replaces the selected draft only after server validation, and requires a new explicit selection.</p><div className="form-actions"><button className="button-primary" disabled={pending} aria-busy={pending} onClick={() => void submitRevision()}>{pending ? "Recording…" : "Record revised specification"}</button><button className="button-secondary" disabled={pending} onClick={() => { setEditorOpen(false); setRevisionParent(null); }}>Cancel revision</button></div></>}
