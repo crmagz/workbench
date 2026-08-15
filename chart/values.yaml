@@ -96,7 +96,8 @@ relay:
     upstreamUrl: ""
     # Must resolve to the same origin as upstreamUrl. Defaults to /healthz.
     readinessUrl: ""
-  upstreamTimeoutMs: 10000
+  # Must exceed Cogito's 60-second planner request budget.
+  upstreamTimeoutMs: 65000
   static:
     upstreamUrl: ""
     existingSecret: ""

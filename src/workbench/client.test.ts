@@ -139,6 +139,20 @@ test("reuses the revision idempotency key after an ambiguous relay timeout", asy
   expect(fetchMock.mock.calls[0]![1].headers).toEqual(fetchMock.mock.calls[1]![1].headers);
 });
 
+test("reuses the evaluation-waiver idempotency key after an ambiguous relay timeout", async () => {
+  const waivedRun: Run = { ...run, artifacts: [{ kind: "specification_evaluation", sha256: "d".repeat(64) }] };
+  const fetchMock = jest
+    .fn<(url: string, options: RequestInit) => Promise<Response>>()
+    .mockResolvedValueOnce({ ok: false, status: 504 } as Response)
+    .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({}) } as Response);
+  global.fetch = fetchMock as unknown as typeof fetch;
+
+  await expect(apiClient.waiveSpecificationEvaluation(waivedRun, "Accepted operational risk.")).rejects.toThrow("504");
+  await apiClient.waiveSpecificationEvaluation(waivedRun, "Accepted operational risk.");
+
+  expect(fetchMock.mock.calls[0]![1].headers).toEqual(fetchMock.mock.calls[1]![1].headers);
+});
+
 test("binds a revision submission to the immutable parent captured by the editor", async () => {
   const laterRun: Run = { ...run, product_specification_revision: 2, artifacts: [{ kind: "product_specification", sha256: "c".repeat(64) }] };
   const fetchMock = jest.fn<(url: string, options: RequestInit) => Promise<Response>>(async () => ({ ok: true, status: 200, json: async () => ({}) } as Response));

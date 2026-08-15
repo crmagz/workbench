@@ -2,14 +2,15 @@ import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const DEFAULT_UPSTREAM_TIMEOUT_MS = 10_000;
+// Cogito allows a 60-second planner request; retain bounded relay headroom.
+const DEFAULT_UPSTREAM_TIMEOUT_MS = 65_000;
 
 const allowed = [
   { method: "GET", path: /^\/healthz$/ },
   { method: "GET", path: /^\/api\/v1\/workbench\/projects$/ },
   { method: "GET", path: /^\/api\/v1\/workbench\/agents(?:\/[^/]+\/[^/]+(?:\/invocations)?)?$/ },
   { method: "GET", path: /^\/api\/v1\/workbench\/agent-invocations\/[^/]+\/[^/]+$/ },
-  { method: "POST", path: /^\/api\/v1\/planning-runs\/[^/]+\/(?:generate-product-specification|evaluate-product-specification|waive-specification-evaluation|select-product-specification|revise-product-specification)$/ },
+  { method: "POST", path: /^\/api\/v1\/planning-runs\/[^/]+\/(?:generate-product-specification|evaluate-product-specification|waive-specification-evaluation|select-product-specification|revise-product-specification|generate-plan)$/ },
   { method: "GET", path: /^\/api\/v1\/workbench\/runs(?:\/[^/]+(?:\/(?:timeline|evidence\/(?:source|product_specification|specification_evaluation|plan|implementation)))?)?$/ },
   { method: "GET", path: /^\/api\/v1\/workbench\/runs\/[^/]+\/feedback$/ },
   { method: "POST", path: /^\/api\/v1\/workbench\/runs\/[^/]+\/feedback$/ },
@@ -58,8 +59,8 @@ function upstreamFailure(response, error, message) {
 function timeoutFromEnvironment(value) {
   if (!value) return DEFAULT_UPSTREAM_TIMEOUT_MS;
   const timeout = Number(value);
-  if (!Number.isInteger(timeout) || timeout < 100 || timeout > 60_000) {
-    throw new Error("COGITO_UPSTREAM_TIMEOUT_MS must be an integer between 100 and 60000");
+  if (!Number.isInteger(timeout) || timeout < 100 || timeout > 65_000) {
+    throw new Error("COGITO_UPSTREAM_TIMEOUT_MS must be an integer between 100 and 65000");
   }
   return timeout;
 }
