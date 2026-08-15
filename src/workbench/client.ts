@@ -54,6 +54,7 @@ export type Run = {
   product_specification_revision?: number;
   selected_product_specification_revision?: number | null;
   specification_evaluation_readiness?: "ready" | "needs_revision" | "waived" | null;
+  specification_evaluation_sha256?: string | null;
   selected_specification_evaluation_sha256?: string | null;
   specification_evaluation_waiver?: SpecificationEvaluationWaiver | null;
   stages?: Stage[];
@@ -248,7 +249,9 @@ export const apiClient: ApiClient = {
     await json(await fetch(`${base}/planning-runs/${encodeURIComponent(runId)}/evaluate-product-specification`, { method: "POST" }));
   },
   async waiveSpecificationEvaluation(run, rationale) {
-    const artifact = run.artifacts.find((item) => item.kind === "specification_evaluation");
+    const artifact = run.specification_evaluation_sha256
+      ? run.artifacts.find((item) => item.kind === "specification_evaluation" && item.sha256 === run.specification_evaluation_sha256)
+      : null;
     if (!artifact) throw new Error("The displayed specification evaluation is unavailable.");
     const normalizedRationale = rationale.trim();
     const fingerprint = `${run.run_id}:${artifact.sha256}:${normalizedRationale}`;
