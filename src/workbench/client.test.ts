@@ -140,7 +140,7 @@ test("reuses the revision idempotency key after an ambiguous relay timeout", asy
 });
 
 test("reuses the evaluation-waiver idempotency key after an ambiguous relay timeout", async () => {
-  const waivedRun: Run = { ...run, artifacts: [{ kind: "specification_evaluation", sha256: "d".repeat(64) }] };
+  const waivedRun: Run = { ...run, specification_evaluation_sha256: "d".repeat(64), artifacts: [{ kind: "specification_evaluation", sha256: "d".repeat(64) }] };
   const fetchMock = jest
     .fn<(url: string, options: RequestInit) => Promise<Response>>()
     .mockResolvedValueOnce({ ok: false, status: 504 } as Response)
