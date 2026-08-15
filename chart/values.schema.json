@@ -86,7 +86,7 @@
       "required": ["mode", "session", "static", "upstreamTimeoutMs"],
       "properties": {
         "mode": { "type": "string", "enum": ["session", "static"] },
-        "upstreamTimeoutMs": { "type": "integer", "minimum": 100, "maximum": 60000 },
+        "upstreamTimeoutMs": { "type": "integer", "minimum": 100, "maximum": 65000 },
         "session": {
           "type": "object",
           "additionalProperties": false,
