@@ -53,6 +53,7 @@ export type Run = {
   product_specification_revision?: number;
   selected_product_specification_revision?: number | null;
   specification_evaluation_readiness?: "ready" | "needs_revision" | "waived" | null;
+  selected_specification_evaluation_sha256?: string | null;
   stages?: Stage[];
   workflow_graph?: WorkflowGraph;
   active_gate: "plan" | "implementation" | null;
@@ -114,6 +115,7 @@ export type ApiClient = {
   decide: (run: Run, decision: "approve" | "reject" | "request_revision", comment?: string, mcpSelection?: McpToolSelection[] | null) => Promise<void>;
   generateProductSpecification: (runId: string) => Promise<void>;
   evaluateProductSpecification: (runId: string) => Promise<void>;
+  waiveSpecificationEvaluation: (run: Run, rationale: string) => Promise<void>;
   selectProductSpecification: (run: Run) => Promise<void>;
   reviseProductSpecification: (run: Run, parent: { revision: number; artifactSha256: string }, specification: unknown) => Promise<void>;
   listAgents: (options: { projectId: string; etag?: string; signal?: AbortSignal }) => Promise<{ agents: Agent[]; revision: string; etag: string | null; unchanged: boolean }>;
@@ -240,6 +242,15 @@ export const apiClient: ApiClient = {
   },
   async evaluateProductSpecification(runId) {
     await json(await fetch(`${base}/planning-runs/${encodeURIComponent(runId)}/evaluate-product-specification`, { method: "POST" }));
+  },
+  async waiveSpecificationEvaluation(run, rationale) {
+    const artifact = run.artifacts.find((item) => item.kind === "specification_evaluation");
+    if (!artifact) throw new Error("The displayed specification evaluation is unavailable.");
+    await json(await fetch(`${base}/planning-runs/${encodeURIComponent(run.run_id)}/waive-specification-evaluation`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
+      body: JSON.stringify({ artifact_sha256: artifact.sha256, rationale: rationale.trim() })
+    }));
   },
   async selectProductSpecification(run) {
     const artifact = run.artifacts.find((item) => item.kind === "product_specification");
