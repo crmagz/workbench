@@ -1,4 +1,4 @@
-export type Artifact = { kind: "source" | "product_specification" | "plan" | "implementation"; sha256: string };
+export type Artifact = { kind: "source" | "product_specification" | "specification_evaluation" | "plan" | "implementation"; sha256: string };
 export type Project = { project_id: string };
 export type Approval = { decision_id: string; gate: "plan" | "implementation"; decision: string; artifact_sha256: string; actor_id: string; created_at: string; delivered: boolean };
 export type Budget = { max_cost_usd: number; max_wall_clock_minutes: number; max_review_rounds: number; actual_cost_usd: number | null; turns_used: number | null };
@@ -52,6 +52,7 @@ export type Run = {
   workflow_id?: string | null;
   product_specification_revision?: number;
   selected_product_specification_revision?: number | null;
+  specification_evaluation_readiness?: "ready" | "needs_revision" | "waived" | null;
   stages?: Stage[];
   workflow_graph?: WorkflowGraph;
   active_gate: "plan" | "implementation" | null;
@@ -112,6 +113,7 @@ export type ApiClient = {
   recordFeedback: (run: Run, artifact: Artifact, stageId: string, comment: string) => Promise<Feedback>;
   decide: (run: Run, decision: "approve" | "reject" | "request_revision", comment?: string, mcpSelection?: McpToolSelection[] | null) => Promise<void>;
   generateProductSpecification: (runId: string) => Promise<void>;
+  evaluateProductSpecification: (runId: string) => Promise<void>;
   selectProductSpecification: (run: Run) => Promise<void>;
   reviseProductSpecification: (run: Run, parent: { revision: number; artifactSha256: string }, specification: unknown) => Promise<void>;
   listAgents: (options: { projectId: string; etag?: string; signal?: AbortSignal }) => Promise<{ agents: Agent[]; revision: string; etag: string | null; unchanged: boolean }>;
@@ -235,6 +237,9 @@ export const apiClient: ApiClient = {
   },
   async generateProductSpecification(runId) {
     await json(await fetch(`${base}/planning-runs/${encodeURIComponent(runId)}/generate-product-specification`, { method: "POST" }));
+  },
+  async evaluateProductSpecification(runId) {
+    await json(await fetch(`${base}/planning-runs/${encodeURIComponent(runId)}/evaluate-product-specification`, { method: "POST" }));
   },
   async selectProductSpecification(run) {
     const artifact = run.artifacts.find((item) => item.kind === "product_specification");
