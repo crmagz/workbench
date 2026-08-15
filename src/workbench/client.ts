@@ -1,6 +1,7 @@
 export type Artifact = { kind: "source" | "product_specification" | "specification_evaluation" | "plan" | "implementation"; sha256: string };
 export type Project = { project_id: string };
 export type Approval = { decision_id: string; gate: "plan" | "implementation"; decision: string; artifact_sha256: string; actor_id: string; created_at: string; delivered: boolean };
+export type SpecificationEvaluationWaiver = { artifact_sha256: string; actor_id: string; rationale: string; created_at: string };
 export type Budget = { max_cost_usd: number; max_wall_clock_minutes: number; max_review_rounds: number; actual_cost_usd: number | null; turns_used: number | null };
 export type Execution = { phase_count: number; succeeded_phase_count: number; failed_phase_count: number; verification_passed: number; verification_failed: number; review_status: string | null; validation_status: string | null };
 export type ExternalLink = { kind: string; label: string; url: string };
@@ -54,6 +55,7 @@ export type Run = {
   selected_product_specification_revision?: number | null;
   specification_evaluation_readiness?: "ready" | "needs_revision" | "waived" | null;
   selected_specification_evaluation_sha256?: string | null;
+  specification_evaluation_waiver?: SpecificationEvaluationWaiver | null;
   stages?: Stage[];
   workflow_graph?: WorkflowGraph;
   active_gate: "plan" | "implementation" | null;
@@ -116,6 +118,7 @@ export type ApiClient = {
   generateProductSpecification: (runId: string) => Promise<void>;
   evaluateProductSpecification: (runId: string) => Promise<void>;
   waiveSpecificationEvaluation: (run: Run, rationale: string) => Promise<void>;
+  generatePlan: (runId: string) => Promise<void>;
   selectProductSpecification: (run: Run) => Promise<void>;
   reviseProductSpecification: (run: Run, parent: { revision: number; artifactSha256: string }, specification: unknown) => Promise<void>;
   listAgents: (options: { projectId: string; etag?: string; signal?: AbortSignal }) => Promise<{ agents: Agent[]; revision: string; etag: string | null; unchanged: boolean }>;
@@ -128,6 +131,7 @@ const base = "/api/cogito/api/v1";
 const inFlightDecisionKeys = new Map<string, string>();
 const inFlightFeedbackKeys = new Map<string, string>();
 const inFlightRevisionKeys = new Map<string, string>();
+const inFlightWaiverKeys = new Map<string, string>();
 // The authoritative evidence reader is bounded at 100 KB. Leave room for the
 // revision envelope so an editor submission cannot be accepted by the relay
 // but become unreadable in the Workbench.
@@ -246,11 +250,25 @@ export const apiClient: ApiClient = {
   async waiveSpecificationEvaluation(run, rationale) {
     const artifact = run.artifacts.find((item) => item.kind === "specification_evaluation");
     if (!artifact) throw new Error("The displayed specification evaluation is unavailable.");
-    await json(await fetch(`${base}/planning-runs/${encodeURIComponent(run.run_id)}/waive-specification-evaluation`, {
+    const normalizedRationale = rationale.trim();
+    const fingerprint = `${run.run_id}:${artifact.sha256}:${normalizedRationale}`;
+    const idempotencyKey = inFlightWaiverKeys.get(fingerprint) ?? crypto.randomUUID();
+    inFlightWaiverKeys.set(fingerprint, idempotencyKey);
+    const response = await fetch(`${base}/planning-runs/${encodeURIComponent(run.run_id)}/waive-specification-evaluation`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
-      body: JSON.stringify({ artifact_sha256: artifact.sha256, rationale: rationale.trim() })
-    }));
+      headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
+      body: JSON.stringify({ artifact_sha256: artifact.sha256, rationale: normalizedRationale })
+    });
+    if (!response.ok) {
+      if (response.status >= 400 && response.status < 500 && response.status !== 408) inFlightWaiverKeys.delete(fingerprint);
+      throw new Error(`Authoritative API request failed (${response.status})`);
+    }
+    try { await response.json(); }
+    catch { throw new Error("Authoritative API response could not be read; retry safely."); }
+    inFlightWaiverKeys.delete(fingerprint);
+  },
+  async generatePlan(runId) {
+    await json(await fetch(`${base}/planning-runs/${encodeURIComponent(runId)}/generate-plan`, { method: "POST" }));
   },
   async selectProductSpecification(run) {
     const artifact = run.artifacts.find((item) => item.kind === "product_specification");
