@@ -2,11 +2,18 @@
 
 An evidence-first, project-scoped operator console for Cogito. It presents a
 filterable Runs inbox, deep-linkable run detail, an authoritative lifecycle
-timeline, digest-bound evidence and approval views, and append-only
-immutable review context. Review context is non-executable: it is scoped to one
-server-owned stage and immutable artifact digest, and does not change a workflow
-or instruct an agent. It is deliberately not a chat client and it does not
-directly access object storage or Temporal.
+timeline, and a centralized workflow-specification workspace. That single form
+combines the active phase, source and product-specification references and
+their immutable digests, editable product-specification JSON, permitted
+workflow decisions, and a durable audit log of workflow and agent activity.
+
+The workspace displays the server-owned projection; it never advances a
+workflow locally or accesses object storage or Temporal. A specification edit
+is confirmed before it creates a new immutable revision. **Approve**, **Needs
+refinement**, and **Cancel** remain digest-bound actions, and refinement or
+cancellation requires a durable rationale. Full immutable-evidence views stay
+available on their dedicated detail routes for plan and evaluation artifacts.
+See [the project context](docs/CONTEXT.md) for the current workflow contract.
 
 ## Local development
 
@@ -102,8 +109,9 @@ ephemeral Kind cluster. Forge owns image publication and release creation.
 
 The hermetic browser suite starts the built Workbench with a constrained local
 relay and a deterministic upstream fixture. It covers scoped inventory,
-deep-link reload, timeline rendering, verified evidence, digest-bound review context, approval feedback,
-and the persisted post-decision state:
+deep-link reload, timeline rendering, legacy verified evidence, centralized
+workflow controls, product-specification revision confirmation, approval
+feedback, and the persisted post-decision state:
 
 ```sh
 npm run test:e2e
