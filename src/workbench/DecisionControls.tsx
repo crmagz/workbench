@@ -40,12 +40,24 @@ export function McpCapabilityEvidence({ run }: { run: Run }) {
   </section>;
 }
 
+function trapDialogFocus(event: React.KeyboardEvent<HTMLElement>, close: () => void) {
+  if (event.key === "Escape") { event.preventDefault(); close(); return; }
+  if (event.key !== "Tab") return;
+  const focusable = Array.from(event.currentTarget.querySelectorAll<HTMLElement>("button:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])"));
+  if (focusable.length === 0) return;
+  const first = focusable[0]; const last = focusable[focusable.length - 1];
+  if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+}
+
 export function DecisionControls({ client, run, onComplete, onSuccess, workflowLabels = false }: { client: ApiClient; run: Run; onComplete: () => Promise<void | boolean>; onSuccess?: () => void; workflowLabels?: boolean }) {
   const [comment, setComment] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
-  const [confirmingCancel, setConfirmingCancel] = useState(false);
+  const [pendingWorkflowDecision, setPendingWorkflowDecision] = useState<"reject" | "request_revision" | null>(null);
   const mounted = useRef(false);
+  const workflowDialogRef = useRef<HTMLElement>(null);
+  const workflowTriggerRef = useRef<HTMLButtonElement | null>(null);
   const artifact = run.active_gate ? run.artifacts.find((item) => item.kind === run.active_gate) : null;
   const capabilities = run.active_gate === "plan" && isDisplaySafeCapabilities(run.mcp_capabilities) ? run.mcp_capabilities : null;
 
@@ -53,6 +65,13 @@ export function DecisionControls({ client, run, onComplete, onSuccess, workflowL
     mounted.current = true;
     return () => { mounted.current = false; };
   }, []);
+
+  useEffect(() => {
+    if (!pendingWorkflowDecision) return;
+    const previousFocus = workflowTriggerRef.current;
+    workflowDialogRef.current?.querySelector<HTMLElement>("textarea:not([disabled]), button:not([disabled])")?.focus();
+    return () => previousFocus?.focus();
+  }, [pendingWorkflowDecision]);
 
   async function decide(decision: "approve" | "reject" | "request_revision") {
     if (decision !== "approve" && !comment.trim()) {
@@ -63,6 +82,7 @@ export function DecisionControls({ client, run, onComplete, onSuccess, workflowL
       setPending(true);
       setMessage(null);
       await client.decide(run, decision, comment, decision === "approve" && capabilities ? null : undefined);
+      if (workflowLabels) setPendingWorkflowDecision(null);
       const refreshed = await onComplete();
       if (refreshed === false) {
         if (mounted.current) setMessage("Decision accepted, but canonical state could not be refreshed.");
@@ -88,21 +108,22 @@ export function DecisionControls({ client, run, onComplete, onSuccess, workflowL
   return (
     <section aria-label="Approval decision" className="decision-panel">
       <h3>{workflowLabels ? "Workflow decision" : `${run.active_gate} approval gate`}</h3>
-      <p className="decision-artifact">
+      {!workflowLabels && <p className="decision-artifact">
         <span>Exact decision artifact SHA-256</span>
         <code aria-label={`Exact ${run.active_gate} decision artifact SHA-256`}>{artifact?.sha256 ?? "Unavailable"}</code>
-      </p>
+      </p>}
       {!artifact && <p className="evidence-error" role="alert">The authoritative decision artifact is unavailable; no action can be submitted.</p>}
       {capabilities && <McpCapabilityEvidence run={run} />}
-      <label className="form-field" htmlFor="decision-comment"><span>Rationale for {workflowLabels ? "revision or cancellation" : "rejection or revision"}</span>
+      {!workflowLabels && <label className="form-field" htmlFor="decision-comment"><span>Rationale for rejection or revision</span>
         <textarea className="form-textarea" id="decision-comment" value={comment} onChange={(event) => setComment(event.target.value)} />
-      </label>
+      </label>}
       <div className="form-actions decision-actions">
-        <button className="button-primary" disabled={pending || !artifact} onClick={() => void decide("approve")}>Approve</button>
-        <button className="button-secondary" disabled={pending || !artifact} onClick={() => void decide("request_revision")}>{workflowLabels ? "Needs revision" : "Request revision"}</button>
-        {workflowLabels ? confirmingCancel ? <><button className="button-danger" disabled={pending || !artifact} onClick={() => void decide("reject")}>Confirm cancel workflow</button><button className="button-secondary" disabled={pending} onClick={() => setConfirmingCancel(false)}>Keep workflow</button></> : <button className="button-danger" disabled={pending || !artifact} onClick={() => setConfirmingCancel(true)}>Cancel workflow</button> : <button className="button-secondary" disabled={pending || !artifact} onClick={() => void decide("reject")}>Reject</button>}
+        <button className={workflowLabels ? "button-success" : "button-primary"} disabled={pending || !artifact} onClick={() => void decide("approve")}>Approve</button>
+        <button className="button-primary" disabled={pending || !artifact} onClick={(event) => { if (workflowLabels) { workflowTriggerRef.current = event.currentTarget; setPendingWorkflowDecision("request_revision"); } else void decide("request_revision"); }}>{workflowLabels ? "Needs refinement" : "Request revision"}</button>
+        {workflowLabels ? <button className="button-danger" disabled={pending || !artifact} onClick={(event) => { workflowTriggerRef.current = event.currentTarget; setPendingWorkflowDecision("reject"); }}>Cancel</button> : <button className="button-secondary" disabled={pending || !artifact} onClick={() => void decide("reject")}>Reject</button>}
       </div>
       <p aria-live="polite">{message}</p>
+      {workflowLabels && pendingWorkflowDecision && <div className="specification-edit-scrim" onMouseDown={() => !pending && setPendingWorkflowDecision(null)}><section ref={workflowDialogRef} className="specification-edit-dialog" role="dialog" aria-modal="true" aria-labelledby="workflow-decision-title" onMouseDown={(event) => event.stopPropagation()} onKeyDown={(event) => trapDialogFocus(event, () => !pending && setPendingWorkflowDecision(null))} tabIndex={-1}><h3 id="workflow-decision-title">{pendingWorkflowDecision === "reject" ? "Cancel workflow" : "Needs refinement"}</h3><p>Provide the durable rationale that will accompany this workflow decision.</p><label className="form-field" htmlFor="workflow-decision-comment"><span>Decision rationale</span><textarea className="form-textarea" id="workflow-decision-comment" value={comment} onChange={(event) => setComment(event.target.value)} /></label><div className="form-actions"><button className={pendingWorkflowDecision === "reject" ? "button-danger" : "button-primary"} disabled={pending || !artifact || !comment.trim()} onClick={() => void decide(pendingWorkflowDecision)}>{pendingWorkflowDecision === "reject" ? "Confirm cancel" : "Confirm refinement"}</button><button className="button-secondary" disabled={pending} onClick={() => setPendingWorkflowDecision(null)}>Keep editing</button></div></section></div>}
     </section>
   );
 }
