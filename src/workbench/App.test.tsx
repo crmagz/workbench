@@ -305,6 +305,7 @@ test("submits a complete edited product specification against its displayed dige
   await user.click(screen.getByRole("button", { name: "Focus Product specification" }));
   const editor = await screen.findByRole("textbox", { name: "Editable product specification JSON" });
   fireEvent.change(editor, { target: { value: '{"title":"reviewed"}' } });
+  expect(document.querySelector(".syntax-textarea-layer")).toHaveTextContent('{"title":"reviewed"}');
   await user.click(screen.getByRole("button", { name: "Accept specification edit" }));
   expect(screen.getByRole("dialog", { name: "Confirm product specification revision" })).toBeVisible();
   await user.click(screen.getByRole("button", { name: "Confirm revised specification" }));
