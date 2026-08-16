@@ -33,6 +33,11 @@ test("forwards only allowlisted Workbench requests with the server-side credenti
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ specification: { text: "x".repeat(17 * 1024) } })
   });
+  const accept = await fetch(`${origin}/api/cogito/api/v1/planning-runs/run-123/accept-product-specification`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "accept-1" },
+    body: JSON.stringify({ expected_product_specification_revision: 1, artifact_sha256: "a".repeat(64) })
+  });
   const productSpecification = await fetch(`${origin}/api/cogito/api/v1/workbench/runs/run-123/evidence/product_specification?artifact_sha256=${"a".repeat(64)}`);
   const denied = await fetch(`${origin}/api/cogito/api/v1/runs`);
   const crossOrigin = await fetch(`${origin}/api/cogito//attacker.example/api/v1/workbench/runs`);
@@ -45,7 +50,12 @@ test("forwards only allowlisted Workbench requests with the server-side credenti
   expect(feedback.status).toBe(200);
   expect(productSpecification.status).toBe(200);
   expect(revise.status).toBe(200);
-  expect(upstream).toHaveBeenCalledTimes(5);
+  expect(accept.status).toBe(200);
+  expect(upstream).toHaveBeenCalledTimes(6);
+  expect(upstream).toHaveBeenCalledWith(
+    new URL("https://api.example.test/api/v1/planning-runs/run-123/accept-product-specification"),
+    expect.objectContaining({ headers: expect.objectContaining({ "idempotency-key": "accept-1" }) })
+  );
   expect(upstream).toHaveBeenCalledWith(
     new URL("https://api.example.test/api/v1/planning-runs/run-123/revise-product-specification"),
     expect.objectContaining({ body: expect.stringContaining("x".repeat(17 * 1024)) })

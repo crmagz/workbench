@@ -110,6 +110,25 @@ test("reuses the revision idempotency key after an ambiguous transport failure",
   });
 });
 
+test("submits acceptance for the displayed revision and reuses its key after an ambiguous failure", async () => {
+  const specificationRun: Run = { ...run, status: "planning", product_specification_revision: 2, artifacts: [{ kind: "product_specification", sha256: "b".repeat(64) }] };
+  const fetchMock = jest
+    .fn<(url: string, options: RequestInit) => Promise<Response>>()
+    .mockRejectedValueOnce(new Error("network interrupted"))
+    .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ outcome: "accepted" }) } as Response);
+  global.fetch = fetchMock as unknown as typeof fetch;
+
+  await expect(apiClient.acceptProductSpecification(specificationRun)).rejects.toThrow("interrupted");
+  await expect(apiClient.acceptProductSpecification(specificationRun)).resolves.toEqual({ outcome: "accepted" });
+
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/api/cogito/api/v1/planning-runs/run-123/accept-product-specification",
+    expect.objectContaining({ method: "POST", headers: expect.objectContaining({ "Idempotency-Key": expect.any(String) }) })
+  );
+  expect(fetchMock.mock.calls[0]![1].headers).toEqual(fetchMock.mock.calls[1]![1].headers);
+  expect(JSON.parse(fetchMock.mock.calls[1]![1].body as string)).toEqual({ revision: 2, artifact_sha256: "b".repeat(64) });
+});
+
 test("reuses the revision idempotency key when a successful response body is interrupted", async () => {
   const specificationRun: Run = { ...run, product_specification_revision: 2, artifacts: [{ kind: "product_specification", sha256: "c".repeat(64) }] };
   const parent = { revision: 1, artifactSha256: "b".repeat(64) };

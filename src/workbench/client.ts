@@ -37,7 +37,7 @@ export type Feedback = { feedback_id: string; run_id: string; intent: "note"; ar
 export type Stage = {
   stage_id: string;
   label: string;
-  state: "completed" | "in_progress" | "awaiting_operator" | "needs_revision" | "failed" | "unavailable";
+  state: "completed" | "in_progress" | "awaiting_operator" | "needs_revision" | "failed" | "unavailable" | "cancelled";
   availability: "authoritative" | "unavailable";
   reason: string;
   artifact_kind: Artifact["kind"] | null;
@@ -45,6 +45,14 @@ export type Stage = {
 export type WorkflowGraphNode = Stage & { node_type: "agent" | "gate" | "queue" };
 export type WorkflowGraphEdge = { source_node_id: string; target_node_id: string; style: "solid" | "dashed"; emphasis: "primary" | "secondary" };
 export type WorkflowGraph = { nodes: WorkflowGraphNode[]; edges: WorkflowGraphEdge[] };
+export type WorkflowAction = {
+  action_id: "generate_product_specification" | "accept_product_specification" | "refine_product_specification" | "generate_plan" | "cancel_planning_run";
+  stage_id: string;
+  label: string;
+  description: string;
+  requires_confirmation: boolean;
+};
+export type ProductSpecificationAcceptance = { outcome: "accepted" | "needs_refinement" };
 export type Run = {
   run_id: string;
   project_id: string;
@@ -57,6 +65,7 @@ export type Run = {
   specification_evaluation_sha256?: string | null;
   selected_specification_evaluation_sha256?: string | null;
   specification_evaluation_waiver?: SpecificationEvaluationWaiver | null;
+  available_actions?: WorkflowAction[];
   stages?: Stage[];
   workflow_graph?: WorkflowGraph;
   active_gate: "plan" | "implementation" | null;
@@ -117,6 +126,8 @@ export type ApiClient = {
   recordFeedback: (run: Run, artifact: Artifact, stageId: string, comment: string) => Promise<Feedback>;
   decide: (run: Run, decision: "approve" | "reject" | "request_revision", comment?: string, mcpSelection?: McpToolSelection[] | null) => Promise<void>;
   generateProductSpecification: (runId: string) => Promise<void>;
+  acceptProductSpecification: (run: Run) => Promise<ProductSpecificationAcceptance>;
+  cancelPlanningRun: (runId: string) => Promise<void>;
   evaluateProductSpecification: (runId: string) => Promise<void>;
   waiveSpecificationEvaluation: (run: Run, rationale: string) => Promise<void>;
   generatePlan: (runId: string) => Promise<void>;
@@ -133,6 +144,8 @@ const inFlightDecisionKeys = new Map<string, string>();
 const inFlightFeedbackKeys = new Map<string, string>();
 const inFlightRevisionKeys = new Map<string, string>();
 const inFlightWaiverKeys = new Map<string, string>();
+const inFlightAcceptanceKeys = new Map<string, string>();
+const inFlightCancellationKeys = new Map<string, string>();
 // The authoritative evidence reader is bounded at 100 KB. Leave room for the
 // revision envelope so an editor submission cannot be accepted by the relay
 // but become unreadable in the Workbench.
@@ -244,6 +257,51 @@ export const apiClient: ApiClient = {
   },
   async generateProductSpecification(runId) {
     await json(await fetch(`${base}/planning-runs/${encodeURIComponent(runId)}/generate-product-specification`, { method: "POST" }));
+  },
+  async acceptProductSpecification(run) {
+    const artifact = run.artifacts.find((item) => item.kind === "product_specification");
+    if (!artifact || !run.product_specification_revision) throw new Error("A displayed product specification revision is required.");
+    const fingerprint = `${run.run_id}:${run.product_specification_revision}:${artifact.sha256}`;
+    const idempotencyKey = inFlightAcceptanceKeys.get(fingerprint) ?? crypto.randomUUID();
+    inFlightAcceptanceKeys.set(fingerprint, idempotencyKey);
+    let response: Response;
+    try {
+      response = await fetch(`${base}/planning-runs/${encodeURIComponent(run.run_id)}/accept-product-specification`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
+        body: JSON.stringify({ revision: run.product_specification_revision, artifact_sha256: artifact.sha256 })
+      });
+    } catch { throw new Error("Authoritative API request was interrupted before a response."); }
+    if (!response.ok) {
+      if (response.status >= 400 && response.status < 500 && response.status !== 408) inFlightAcceptanceKeys.delete(fingerprint);
+      throw new Error(`Authoritative API request failed (${response.status})`);
+    }
+    let body: ProductSpecificationAcceptance;
+    try { body = await response.json() as ProductSpecificationAcceptance; }
+    catch { throw new Error("Authoritative API response could not be read; retry safely."); }
+    if (body.outcome !== "accepted" && body.outcome !== "needs_refinement") {
+      inFlightAcceptanceKeys.delete(fingerprint);
+      throw new Error("Authoritative API response did not include a specification acceptance outcome.");
+    }
+    inFlightAcceptanceKeys.delete(fingerprint);
+    return body;
+  },
+  async cancelPlanningRun(runId) {
+    const idempotencyKey = inFlightCancellationKeys.get(runId) ?? crypto.randomUUID();
+    inFlightCancellationKeys.set(runId, idempotencyKey);
+    let response: Response;
+    try {
+      response = await fetch(`${base}/planning-runs/${encodeURIComponent(runId)}/cancel`, {
+        method: "POST", headers: { "Idempotency-Key": idempotencyKey }
+      });
+    } catch { throw new Error("Authoritative API request was interrupted before a response."); }
+    if (!response.ok) {
+      if (response.status >= 400 && response.status < 500 && response.status !== 408) inFlightCancellationKeys.delete(runId);
+      throw new Error(`Authoritative API request failed (${response.status})`);
+    }
+    try { await response.json(); }
+    catch { throw new Error("Authoritative API response could not be read; retry safely."); }
+    inFlightCancellationKeys.delete(runId);
   },
   async evaluateProductSpecification(runId) {
     await json(await fetch(`${base}/planning-runs/${encodeURIComponent(runId)}/evaluate-product-specification`, { method: "POST" }));
