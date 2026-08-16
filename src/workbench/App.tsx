@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { apiClient, type Agent, type AgentInvocation, type AgentInvocationDetail, type ApiClient, type Artifact, type Feedback, type Project, type Run, type Stage, type TimelineEvent } from "./client";
+import { apiClient, type Agent, type AgentInvocation, type AgentInvocationDetail, type ApiClient, type Artifact, type Project, type Run, type Stage, type TimelineEvent } from "./client";
 import { DecisionControls, McpCapabilityEvidence } from "./DecisionControls";
 
 type DetailTab = "summary" | "workflow" | "timeline" | "artifacts" | "plan" | "execution" | "review" | "approvals";
@@ -157,12 +157,15 @@ function productPlan(content: string, artifact: Artifact | null): ProductPlan | 
     return { title: parsed.title, summary: parsed.summary, phases };
   } catch { return null; }
 }
+// Retained for legacy run-detail views while the consolidated workspace renders raw immutable evidence only.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function ProductPlanSummary({ content, artifact }: { content: string; artifact: Artifact | null }) {
   const plan = productPlan(content, artifact);
   if (!plan) return null;
   return <section className="card dossier-section plan-summary" aria-labelledby="verified-plan-summary-title"><h3 id="verified-plan-summary-title" className="panel-title">Verified plan summary</h3><div className="dossier-section-body"><h4>{plan.title}</h4><p className="dossier-description">{plan.summary}</p><div className="timeline">{plan.phases.map((phase) => <div className="tl-item" key={phase.id}><i /><span><b>{phase.name}</b><small>{phase.description}</small>{phase.requirementIds.length > 0 && <small>Requirements: {phase.requirementIds.join(" · ")}</small>}{phase.acceptanceCriteria.length > 0 && <small>Acceptance: {phase.acceptanceCriteria.join(" · ")}</small>}{phase.verificationReferences.length > 0 && <small>Verification: {phase.verificationReferences.join(" · ")}</small>}{phase.riskNotes.length > 0 && <small>Risks: {phase.riskNotes.join(" · ")}</small>}{phase.rollbackNotes.length > 0 && <small>Rollback: {phase.rollbackNotes.join(" · ")}</small>}</span></div>)}</div></div></section>;
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function SpecificationEvaluationSummary({ content, artifact }: { content: string; artifact: Artifact | null }) {
   if (artifact?.kind !== "specification_evaluation") return null;
   try {
@@ -192,70 +195,110 @@ function prettyEvidence(content: string) {
   } catch { return content; }
 }
 
-function EvidenceViewer({ client, run, initial, stageId, heading = "Verified immutable evidence", onComplete = async () => true }: { client: ApiClient; run: Run; initial?: Artifact["kind"]; stageId?: string; heading?: string; onComplete?: () => Promise<void | boolean> }) {
+function trapDialogFocus(event: React.KeyboardEvent<HTMLElement>, close: () => void) {
+  if (event.key === "Escape") { event.preventDefault(); close(); return; }
+  if (event.key !== "Tab") return;
+  const focusable = Array.from(event.currentTarget.querySelectorAll<HTMLElement>("button:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])"));
+  if (focusable.length === 0) return;
+  const first = focusable[0]; const last = focusable[focusable.length - 1];
+  if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+}
+
+function EvidenceViewer({ client, run, initial, heading = "Verified immutable evidence", onComplete = async () => true, onDecisionComplete, workflowLabels = false }: { client: ApiClient; run: Run; initial?: Artifact["kind"]; stageId?: string; heading?: string; onComplete?: () => Promise<void | boolean>; onDecisionComplete?: () => void; workflowLabels?: boolean }) {
+  return workflowLabels ? <WorkflowSpecificationWorkspace client={client} run={run} initial={initial} heading={heading} onComplete={onComplete} onDecisionComplete={onDecisionComplete} /> : <ImmutableEvidenceViewer client={client} run={run} initial={initial} heading={heading} />;
+}
+
+function WorkflowSpecificationWorkspace({ client, run, initial, heading, onComplete, onDecisionComplete }: { client: ApiClient; run: Run; initial?: Artifact["kind"]; heading: string; onComplete: () => Promise<void | boolean>; onDecisionComplete?: () => void }) {
+  const specificationArtifacts = run.artifacts.filter((artifact) => artifact.kind === "source" || artifact.kind === "product_specification");
+  const initialArtifact = initial === "source" || initial === "product_specification" ? evidenceFor(run, initial) : null;
+  const [selected, setSelected] = useState<Artifact | null>(() => initialArtifact ?? specificationArtifacts[0] ?? null);
+  const sourceArtifact = evidenceFor(run, "source"); const productArtifact = evidenceFor(run, "product_specification");
+  useEffect(() => { setSelected((current) => { const currentKind = current?.kind; const replacement = currentKind === "source" ? sourceArtifact : currentKind === "product_specification" ? productArtifact : initialArtifact ?? specificationArtifacts[0] ?? null; return replacement ?? initialArtifact ?? specificationArtifacts[0] ?? null; }); }, [initialArtifact?.sha256, productArtifact?.sha256, run.run_id, sourceArtifact?.sha256]);
+  return <section className="workflow-specifications" aria-labelledby="workflow-specification-workspace-title"><div className="section-heading"><div><p className="eyebrow">Workflow specifications</p><h3 id="workflow-specification-workspace-title">{heading}</h3></div><small>Immutable specification references, edits, and active workflow decisions.</small></div><div className="workflow-specification-workspace"><div className="specification-artifact-selector"><div className="artifact-list">{specificationArtifacts.map((artifact) => <button key={`${artifact.kind}:${artifact.sha256}`} className={selected?.sha256 === artifact.sha256 ? "selected" : ""} aria-pressed={selected?.sha256 === artifact.sha256} onClick={() => setSelected(artifact)}><b>{artifactLabel(artifact.kind)}</b><small>{artifact.sha256.slice(0, 12)}</small></button>)}</div>{selected && <p className="control-note">Digest: <span className="mono">{selected.sha256}</span></p>}{!selected && <p className="control-note">No specification references are available for this run.</p>}</div>{specificationArtifacts.length > 0 && <ProductSpecificationControls client={client} run={run} onComplete={onComplete} showHeading={false} compact />}{run.active_gate && <DecisionControls client={client} run={run} onComplete={onComplete} onSuccess={onDecisionComplete} workflowLabels />}{run.active_gate !== "plan" && <McpCapabilityEvidence run={run} />}</div></section>;
+}
+
+function ImmutableEvidenceViewer({ client, run, initial, heading }: { client: ApiClient; run: Run; initial?: Artifact["kind"]; heading: string }) {
   const [selected, setSelected] = useState<Artifact | null>(() => initial ? evidenceFor(run, initial) : run.artifacts[0] ?? null);
-  const [content, setContent] = useState(""); const [error, setError] = useState<string | null>(null); const [loading, setLoading] = useState(false); const [evidenceExpanded, setEvidenceExpanded] = useState(false); const [note, setNote] = useState(""); const [feedbackNotice, setFeedbackNotice] = useState<string | null>(null); const [feedback, setFeedback] = useState<Feedback[] | null>(null); const [submittingFeedback, setSubmittingFeedback] = useState(false); const [loadingFeedback, setLoadingFeedback] = useState(false);
-  useEffect(() => { setSelected(initial ? evidenceFor(run, initial) : run.artifacts[0] ?? null); setContent(""); setError(null); setEvidenceExpanded(false); setFeedback(null); setFeedbackNotice(null); }, [initial, run.run_id]);
-  useEffect(() => {
-    if (!stageId || !selected) return;
-    let cancelled = false;
-    setLoadingFeedback(true);
-    void client.getFeedback(run.run_id).then((items) => { if (!cancelled) setFeedback(items); }).catch((reason) => { if (!cancelled) setFeedbackNotice(reason instanceof Error ? reason.message : "Recorded review context is unavailable."); }).finally(() => { if (!cancelled) setLoadingFeedback(false); });
-    return () => { cancelled = true; };
-  }, [client, run.run_id, selected?.sha256, stageId]);
+  const [content, setContent] = useState(""); const [error, setError] = useState<string | null>(null); const [loading, setLoading] = useState(false); const [expanded, setExpanded] = useState(false);
+  useEffect(() => { setSelected(initial ? evidenceFor(run, initial) : run.artifacts[0] ?? null); setContent(""); setError(null); setExpanded(false); }, [initial, run.run_id]);
   const open = async (artifact: Artifact, forceExpanded = false) => {
-    if (!forceExpanded && selected?.sha256 === artifact.sha256 && content) { setEvidenceExpanded((expanded) => !expanded); return; }
-    setSelected(artifact); setContent(""); setEvidenceExpanded(true); setLoading(true); setError(null); setFeedbackNotice(null);
-    try { setContent((await client.getEvidence(run.run_id, artifact)).content); } catch (reason) { setContent(""); setError(reason instanceof Error ? reason.message : "Verified evidence is unavailable."); } finally { setLoading(false); }
+    if (!forceExpanded && selected?.sha256 === artifact.sha256 && content) { setExpanded((value) => !value); return; }
+    setSelected(artifact); setContent(""); setError(null); setExpanded(true); setLoading(true);
+    try { setContent((await client.getEvidence(run.run_id, artifact)).content); } catch (reason) { setError(reason instanceof Error ? reason.message : "Verified evidence is unavailable."); } finally { setLoading(false); }
   };
-  useEffect(() => {
-    const artifact = initial ? evidenceFor(run, initial) : run.artifacts[0] ?? null;
-    if (artifact) void open(artifact, true);
-  }, [initial, run.run_id]);
-  const submitNote = async () => { if (!selected || !stageId || !note.trim()) return; try { setSubmittingFeedback(true); const recorded = await client.recordFeedback(run, selected, stageId, note.trim()); setFeedbackNotice(`Review context recorded at ${new Date(recorded.created_at).toLocaleString()}. It does not change execution.`); setFeedback((items) => [recorded, ...(items ?? [])]); setNote(""); } catch (reason) { setFeedbackNotice(reason instanceof Error ? reason.message : "Review context could not be recorded."); } finally { setSubmittingFeedback(false); } };
-  const visibleFeedback = feedback?.filter((item) => item.stage_id === stageId && item.artifact_sha256 === selected?.sha256) ?? [];
-  const supportsSpecificationActions = selected?.kind === "source" || selected?.kind === "product_specification";
-  return <div className="dossier-section-stack"><section className="card dossier-section evidence-card"><h2 className="panel-title">{heading}</h2><div className="dossier-section-body"><div className="artifact-list">{run.artifacts.map((artifact) => <button key={`${artifact.kind}:${artifact.sha256}`} className={selected?.sha256 === artifact.sha256 ? "selected" : ""} aria-expanded={selected?.sha256 === artifact.sha256 && evidenceExpanded} onClick={() => void open(artifact)}><b>{artifactLabel(artifact.kind)}</b><small>{artifact.sha256.slice(0, 12)}</small></button>)}</div>{selected && <p className="control-note">Digest: <span className="mono">{selected.sha256}</span></p>}{loading && <p className="control-note" role="status">Loading verified evidence…</p>}{error && <p className="evidence-error" role="alert">{error}</p>}{content && evidenceExpanded && <pre className="evidence-json" aria-label="Verified evidence">{prettyEvidence(content)}</pre>}{!selected && <p className="control-note">No immutable evidence is available for this run.</p>}</div></section>{content && evidenceExpanded && <ProductPlanSummary content={content} artifact={selected} />}{content && evidenceExpanded && <SpecificationEvaluationSummary content={content} artifact={selected} />}{stageId && selected && <section className="card dossier-section review-context"><h3 className="panel-title">{supportsSpecificationActions ? "Review & specification" : "Review context"}</h3><div className="dossier-section-body">{supportsSpecificationActions && <ProductSpecificationControls client={client} run={run} onComplete={onComplete} showHeading={false} compact />}<label className="form-field" htmlFor="review-context"><span>Context for reviewers</span><textarea id="review-context" className="form-textarea" aria-describedby="review-context-limit" value={note} onChange={(event) => setNote(event.target.value)} maxLength={10_000} placeholder="Add decision context, assumptions, or rollout concerns…" /></label><p id="review-context-limit" className="form-help">Up to 10,000 characters. Recording is permanent for this stage and digest.</p><div className="form-actions"><button className="button-primary" disabled={!note.trim() || submittingFeedback} aria-busy={submittingFeedback} onClick={() => void submitNote()}>{submittingFeedback ? "Recording…" : "Record context"}</button></div>{loadingFeedback && <p className="control-note" role="status">Loading recorded review context…</p>}{feedbackNotice && <p className="sync-row" role="status">{feedbackNotice}</p>}{feedback && (visibleFeedback.length ? <div className="timeline" aria-label="Recorded review context">{visibleFeedback.map((item) => <div className="tl-item" key={item.feedback_id}><i /><span><b>{item.actor_id}</b><small>{new Date(item.created_at).toLocaleString()} · {item.comment}</small></span></div>)}</div> : <p className="control-note">No review context is bound to this stage and digest.</p>)}</div></section>}</div>;
+  useEffect(() => { const artifact = initial ? evidenceFor(run, initial) : run.artifacts[0] ?? null; if (artifact) void open(artifact, true); }, [initial, run.run_id]);
+  return <section className="card dossier-section evidence-card"><h2 className="panel-title">{heading}</h2><div className="dossier-section-body"><div className="artifact-list">{run.artifacts.map((artifact) => <button key={`${artifact.kind}:${artifact.sha256}`} className={selected?.sha256 === artifact.sha256 ? "selected" : ""} aria-expanded={selected?.sha256 === artifact.sha256 && expanded} onClick={() => void open(artifact)}><b>{artifactLabel(artifact.kind)}</b><small>{artifact.sha256.slice(0, 12)}</small></button>)}</div>{selected && <p className="control-note">Digest: <span className="mono">{selected.sha256}</span></p>}{loading && <p className="control-note" role="status">Loading verified evidence…</p>}{error && <p className="evidence-error" role="alert">{error}</p>}{content && expanded && <pre className="evidence-json" aria-label="Verified evidence">{prettyEvidence(content)}</pre>}</div></section>;
 }
 
 function ProductSpecificationControls({ client, run, onComplete, showHeading = true, compact = false }: { client: ApiClient; run: Run; onComplete: () => Promise<void | boolean>; showHeading?: boolean; compact?: boolean }) {
   const [pending, setPending] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [revisionText, setRevisionText] = useState("");
-  const [editorOpen, setEditorOpen] = useState(false);
+  const [revisionDirty, setRevisionDirty] = useState(false);
+  const [revisionStale, setRevisionStale] = useState(false);
+  const [revisionReload, setRevisionReload] = useState(0);
+  const [loadingRevision, setLoadingRevision] = useState(false);
+  const [confirmingRevision, setConfirmingRevision] = useState(false);
   const [waiverRationale, setWaiverRationale] = useState("");
   const [revisionParent, setRevisionParent] = useState<{ revision: number; artifactSha256: string } | null>(null);
+  const syntaxLayerRef = useRef<HTMLPreElement>(null);
+  const revisionLoadRef = useRef(0);
+  const revisionDialogRef = useRef<HTMLElement>(null);
+  const revisionTriggerRef = useRef<HTMLButtonElement>(null);
   const artifact = evidenceFor(run, "product_specification");
   const selected = run.selected_product_specification_revision !== null && run.selected_product_specification_revision !== undefined;
   const mutable = run.status === "planning";
   const specificationRevision = run.product_specification_revision;
   const hasMutableRevision = typeof specificationRevision === "number" && Number.isInteger(specificationRevision) && specificationRevision >= 1;
   const act = async (action: () => Promise<void>, message: string) => {
-    try { setPending(true); setNotice(null); await action(); await onComplete(); setNotice(message); return true; }
+    try { setPending(true); setNotice(null); await action(); const refreshed = await onComplete(); if (refreshed === false) { setNotice("Action was accepted, but the authoritative workflow could not be refreshed. Refresh before continuing."); return false; } setNotice(message); return true; }
     catch (reason) { setNotice(reason instanceof Error ? reason.message : "The product specification action could not be completed."); return false; }
     finally { setPending(false); }
   };
-  const beginRevision = async () => {
-    if (!artifact || !hasMutableRevision || specificationRevision === undefined) {
-      setNotice("The displayed product specification revision is unavailable. Refresh the run before editing or selecting it.");
+  useEffect(() => {
+    const request = ++revisionLoadRef.current;
+    if (!mutable || !artifact || !hasMutableRevision || specificationRevision === undefined) return;
+    if (revisionDirty && revisionParent && (revisionParent.revision !== specificationRevision || revisionParent.artifactSha256 !== artifact.sha256)) {
+      setRevisionStale(true); setConfirmingRevision(false); setLoadingRevision(false); setNotice("A newer product specification is available. Your unsaved edit is preserved; reload before accepting it.");
       return;
     }
-    try {
-      setPending(true); setNotice(null);
-      const evidence = await client.getEvidence(run.run_id, artifact);
+    setLoadingRevision(true); setNotice(null);
+    void client.getEvidence(run.run_id, artifact).then((evidence) => {
+      if (request !== revisionLoadRef.current) return;
       const parsed: unknown = JSON.parse(evidence.content);
       setRevisionText(JSON.stringify(parsed, null, 2));
       setRevisionParent({ revision: specificationRevision, artifactSha256: artifact.sha256 });
-      setEditorOpen(true);
-    } catch (reason) { setNotice(reason instanceof Error ? reason.message : "The immutable product specification could not be loaded."); }
-    finally { setPending(false); }
-  };
-  const submitRevision = async () => {
+      setRevisionDirty(false); setRevisionStale(false);
+      setConfirmingRevision(false);
+    }).catch((reason) => {
+      if (request === revisionLoadRef.current) setNotice(reason instanceof Error ? reason.message : "The immutable product specification could not be loaded.");
+    }).finally(() => { if (request === revisionLoadRef.current) setLoadingRevision(false); });
+  }, [artifact?.sha256, client, hasMutableRevision, mutable, revisionReload, run.run_id, specificationRevision]);
+  useEffect(() => {
+    if (!confirmingRevision) return;
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    revisionDialogRef.current?.querySelector<HTMLElement>("button:not([disabled]), textarea:not([disabled])")?.focus();
+    return () => previousFocus?.focus();
+  }, [confirmingRevision]);
+  const confirmRevision = () => {
     let parsed: unknown;
     try {
       parsed = JSON.parse(revisionText);
     } catch { setNotice("Enter a complete valid JSON product specification before submitting."); }
-    if (parsed !== undefined && revisionParent && await act(() => client.reviseProductSpecification(run, revisionParent, parsed), "Revision recorded. Review and select the new immutable evidence before planning.")) { setEditorOpen(false); setRevisionParent(null); }
+    if (parsed !== undefined && revisionParent) setConfirmingRevision(true);
+  };
+  const submitRevision = async () => {
+    if (revisionStale || !artifact || !revisionParent || revisionParent.revision !== specificationRevision || revisionParent.artifactSha256 !== artifact.sha256) {
+      setConfirmingRevision(false); setRevisionStale(true); setNotice("A newer product specification is available. Reload it before accepting an edit.");
+      return;
+    }
+    let parsed: unknown;
+    try { parsed = JSON.parse(revisionText); } catch { setNotice("Enter a complete valid JSON product specification before submitting."); setConfirmingRevision(false); }
+    if (parsed !== undefined && revisionParent) {
+      const recorded = await act(() => client.reviseProductSpecification(run, revisionParent, parsed), "Revision recorded. Review and select the new immutable evidence before planning.");
+      if (recorded) { setRevisionText(""); setConfirmingRevision(false); setRevisionParent(null); } else setConfirmingRevision(false);
+    }
   };
   return <section className={compact ? "product-specification-controls" : "card dossier-section"}>{showHeading && <h2 className="panel-title">Product specification</h2>}<div className={compact ? undefined : "dossier-section-body"}>
     {!mutable && <p className="control-note">This product specification is immutable because the run is no longer in refinement.</p>}
@@ -264,13 +307,12 @@ function ProductSpecificationControls({ client, run, onComplete, showHeading = t
     {mutable && artifact && hasMutableRevision && !run.specification_evaluation_readiness && <button className="button-primary" disabled={pending} aria-busy={pending} onClick={() => void act(() => client.evaluateProductSpecification(run.run_id), "Evaluation recorded. Review its readiness before selecting this specification.")}>{pending ? "Evaluating…" : "Evaluate product specification"}</button>}
     {run.specification_evaluation_readiness === "needs_revision" && <><p className="evidence-error" role="alert">Evaluation requires a revised product specification before planning can continue, unless an authorized operator records an explicit exception.</p><label className="form-field" htmlFor="evaluation-waiver-rationale"><span>Waiver rationale</span><textarea id="evaluation-waiver-rationale" className="form-textarea" value={waiverRationale} onChange={(event) => setWaiverRationale(event.target.value)} maxLength={2000} placeholder="Explain why the evaluation finding is accepted…" /></label><div className="form-actions"><button className="button-secondary" disabled={pending || !waiverRationale.trim()} aria-busy={pending} onClick={() => void act(() => client.waiveSpecificationEvaluation(run, waiverRationale), "Evaluation waiver recorded. Review and select this specification before planning.")}>{pending ? "Recording…" : "Record evaluation waiver"}</button></div></>}
     {run.specification_evaluation_readiness === "waived" && <div className="sync-row" role="status">{run.specification_evaluation_waiver ? <>Evaluation waiver recorded by <b>{run.specification_evaluation_waiver.actor_id}</b> on {new Date(run.specification_evaluation_waiver.created_at).toLocaleString()}: {run.specification_evaluation_waiver.rationale}</> : "An authorized evaluation waiver is recorded for this specification."}</div>}
-    {mutable && artifact && hasMutableRevision && !editorOpen && <button className="button-secondary" disabled={pending} aria-busy={pending} onClick={() => void beginRevision()}>{pending ? "Loading revision…" : "Edit product specification"}</button>}
+    {mutable && artifact && hasMutableRevision && <div className="specification-editor"><label className="form-field" htmlFor="product-specification-revision"><span>Editable product specification JSON</span><div className="syntax-textarea"><pre ref={syntaxLayerRef} aria-hidden="true" className="evidence-json syntax-textarea-layer">{prettyEvidence(revisionText)}</pre><textarea id="product-specification-revision" className="form-textarea syntax-textarea-input" value={revisionText} onChange={(event) => { setRevisionText(event.target.value); setRevisionDirty(true); }} onScroll={(event) => syntaxLayerRef.current?.scrollTo({ top: event.currentTarget.scrollTop, left: event.currentTarget.scrollLeft })} aria-describedby="product-specification-revision-help" disabled={loadingRevision || pending} /></div></label><p id="product-specification-revision-help" className="form-help">Edit the complete JSON here. Accepting creates a new immutable revision after confirmation and server validation.</p><div className="form-actions"><button ref={revisionTriggerRef} className="button-primary" disabled={revisionStale || loadingRevision || pending || !revisionText} onClick={confirmRevision}>{loadingRevision ? "Loading specification…" : "Accept specification edit"}</button>{revisionStale && <button className="button-secondary" disabled={pending} onClick={() => { setRevisionDirty(false); setRevisionStale(false); setRevisionReload((value) => value + 1); }}>Reload latest specification</button>}</div></div>}
     {mutable && artifact && hasMutableRevision && !selected && (run.specification_evaluation_readiness === "ready" || run.specification_evaluation_readiness === "waived") && <button className="button-primary" disabled={pending} aria-busy={pending} onClick={() => void act(() => client.selectProductSpecification(run), "Product specification selected for planning.")}>{pending ? "Selecting…" : "Select product specification"}</button>}
     {mutable && selected && <button className="button-primary" disabled={pending} aria-busy={pending} onClick={() => void act(() => client.generatePlan(run.run_id), "Plan generated. Review the immutable plan before approval.")}>{pending ? "Generating plan…" : "Generate plan"}</button>}
-    {editorOpen && mutable && <><label className="form-field" htmlFor="product-specification-revision"><span>Complete product specification JSON</span><textarea id="product-specification-revision" className="form-textarea" value={revisionText} onChange={(event) => setRevisionText(event.target.value)} aria-describedby="product-specification-revision-help" /></label><p id="product-specification-revision-help" className="form-help">The complete request is limited to 96 KiB, replaces the selected draft only after server validation, and requires a new explicit selection.</p><div className="form-actions"><button className="button-primary" disabled={pending} aria-busy={pending} onClick={() => void submitRevision()}>{pending ? "Recording…" : "Record revised specification"}</button><button className="button-secondary" disabled={pending} onClick={() => { setEditorOpen(false); setRevisionParent(null); }}>Cancel revision</button></div></>}
     {selected && <p className="sync-row" role="status">Product specification revision {run.selected_product_specification_revision} is selected for planning.</p>}
     {notice && <p className="sync-row" role="status">{notice}</p>}
-  </div></section>;
+  </div>{confirmingRevision && mutable && <div className="specification-edit-scrim" onMouseDown={() => !pending && setConfirmingRevision(false)}><section ref={revisionDialogRef} className="specification-edit-dialog" role="dialog" aria-modal="true" aria-labelledby="specification-edit-title" onMouseDown={(event) => event.stopPropagation()} onKeyDown={(event) => trapDialogFocus(event, () => !pending && setConfirmingRevision(false))} tabIndex={-1}><h3 id="specification-edit-title">Confirm product specification revision</h3><p>The edited JSON will be submitted as a new immutable revision for server validation.</p><div className="form-actions"><button className="button-primary" disabled={pending} aria-busy={pending} onClick={() => void submitRevision()}>{pending ? "Recording…" : "Confirm revised specification"}</button><button className="button-secondary" disabled={pending} onClick={() => setConfirmingRevision(false)}>Continue editing</button></div></section></div>}</section>;
 }
 
 function Timeline({ events }: { events: TimelineEvent[] }) { return <section className="card"><h2 className="panel-title">Authoritative timeline</h2>{events.length === 0 ? <p className="control-note">No persisted lifecycle events are available yet.</p> : <div className="timeline">{events.map((event) => <div className="tl-item" key={event.event_id}><i /><span><b>{statusLabel(event.event_type)}</b><small>{new Date(event.occurred_at).toLocaleString()} · {event.gate ? `${event.gate} gate` : event.lifecycle_status ?? "lifecycle event"}{event.decision ? ` · ${event.decision}` : ""}{event.artifact_sha256 ? ` · ${event.artifact_sha256.slice(0, 12)}` : ""}</small></span><Pill status={event.delivered ? "delivered" : "pending"} label={event.delivered ? "delivered" : `${event.delivery_attempt_count} attempts`} /></div>)}</div>}</section>; }
@@ -366,7 +408,7 @@ function WorkflowControlCenter({ client, run, node, edges, timeline, onRefresh, 
     <header className="workflow-control-heading"><div><p className="eyebrow">Workflow operator console</p><h2 id="workflow-control-center-title">Workflow control center</h2><p>One workspace for the selected phase, immutable specifications, durable audit activity, and operator decisions.</p></div><Pill status={node.status} label={`${node.name} · ${statusLabel(node.status)}`} /></header>
     {decisionNotice && <p className="sync-row" role="status">{decisionNotice}</p>}
     <section className="phase-context" aria-label="Selected workflow phase"><div><p className="eyebrow">Selected phase</p><h3>{node.name}</h3><p>{node.reason}</p></div><dl><div><dt>Phase type</dt><dd>{node.type}</dd></div><div><dt>State source</dt><dd>{node.availability}</dd></div><div><dt>Evidence</dt><dd>{node.artifactKind ?? "Unavailable"}</dd></div><div><dt>Connected phases</dt><dd>{dependencies.length}</dd></div></dl></section>
-    <section className="workflow-specifications"><div className="section-heading"><p className="eyebrow">Workflow specifications</p><small>Phase evidence changes below; active workflow decisions remain here.</small></div>{(run.active_gate || run.mcp_capabilities?.state === "approved") && <div className="workflow-specification-actions">{run.active_gate && <DecisionControls client={client} run={run} onComplete={onRefresh} onSuccess={onDecisionComplete} workflowLabels />}{run.active_gate !== "plan" && <McpCapabilityEvidence run={run} />}</div>}<EvidenceViewer key={node.id} client={client} run={run} initial={node.artifactKind ?? undefined} stageId={node.id} heading="Specifications & immutable evidence" onComplete={onRefresh} /></section>
+    <EvidenceViewer key={node.id} client={client} run={run} initial={node.artifactKind ?? undefined} heading="Workflow specification workspace" onComplete={onRefresh} onDecisionComplete={onDecisionComplete} workflowLabels />
     <section className="workflow-audit card" aria-labelledby="workflow-audit-title"><div className="section-heading"><div><p className="eyebrow">Centralized audit log</p><h3 id="workflow-audit-title">Workflow audit activity</h3></div><small>Durable lifecycle, agent, and approval events — never raw agent output.</small></div>{timeline.length ? <ol>{timeline.map((event) => <li key={event.event_id} className={event.stage_ids.includes(node.id) ? "selected" : ""}><i /><div><b>{statusLabel(event.event_type)}</b><small>{event.stage_ids.length ? event.stage_ids.map(stageName).join(" · ") : event.gate ?? "workflow"} · {event.delivered ? "delivered" : "pending delivery"}</small></div><time dateTime={event.occurred_at}>{new Date(event.occurred_at).toLocaleString()}</time></li>)}</ol> : <p className="control-note">No durable workflow audit activity is available yet.</p>}</section>
     {events.length > 0 && <p className="workflow-selection-note">Showing {events.length} audit event{events.length === 1 ? "" : "s"} related to the selected phase; the centralized log above retains the full workflow history.</p>}
   </section>;

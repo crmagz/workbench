@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { jest } from "@jest/globals";
 
 import { DecisionControls } from "./DecisionControls";
@@ -51,4 +51,25 @@ test("does not claim a canonical refresh when it cannot load the authoritative r
   fireEvent.click(screen.getByRole("button", { name: "Approve" }));
 
   expect(await screen.findByText("Decision accepted, but canonical state could not be refreshed.")).toBeVisible();
+});
+
+test("moves focus into and restores focus from workflow decision dialogs", () => {
+  const current = run("run-focus", [grant("catalog_read")]);
+  render(<DecisionControls client={{ decide: async () => undefined } as unknown as ApiClient} run={current} onComplete={async () => undefined} workflowLabels />);
+
+  const trigger = screen.getByRole("button", { name: "Needs refinement" });
+  fireEvent.click(trigger);
+  expect(screen.getByRole("textbox", { name: "Decision rationale" })).toHaveFocus();
+  fireEvent.keyDown(screen.getByRole("dialog", { name: "Needs refinement" }), { key: "Escape" });
+  expect(trigger).toHaveFocus();
+});
+
+test("closes a submitted workflow decision dialog before an eventually consistent refresh", async () => {
+  const current = run("run-submitted", [grant("catalog_read")]);
+  render(<DecisionControls client={{ decide: async () => undefined } as unknown as ApiClient} run={current} onComplete={async () => undefined} workflowLabels />);
+
+  fireEvent.click(screen.getByRole("button", { name: "Needs refinement" }));
+  fireEvent.change(screen.getByRole("textbox", { name: "Decision rationale" }), { target: { value: "Needs review." } });
+  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Confirm refinement" })); await Promise.resolve(); await Promise.resolve(); });
+  expect(screen.queryByRole("dialog", { name: "Needs refinement" })).not.toBeInTheDocument();
 });

@@ -183,13 +183,22 @@ test("presents Mission Control with filterable authoritative workflow identity",
   expect(screen.getByText("No scoped workflows match this Mission Control view.")).toBeVisible();
 });
 
-test("displays the complete digest bound to a waiting-gate decision", async () => {
+test("displays the complete digest in the workflow specification workspace", async () => {
   const user = userEvent.setup();
   render(<App client={client()} />);
 
   await user.click(await screen.findByText("run-12345678"));
 
-  expect(screen.getByLabelText("Exact plan decision artifact SHA-256")).toHaveTextContent(digest);
+  expect(await screen.findByText(digest)).toBeVisible();
+});
+
+test("preserves verified plan evidence in the legacy plan route", async () => {
+  const plan = '{"title":"verified plan"}';
+  window.history.replaceState({}, "", "/runs/run-12345678/plan");
+  render(<App client={client({ getEvidence: async () => ({ content: plan, sha256: digest }) })} />);
+
+  expect(await screen.findByLabelText("Verified evidence")).toHaveTextContent("verified plan");
+  expect(screen.getByRole("button", { name: `plan ${digest.slice(0, 12)}` })).toHaveAttribute("aria-expanded", "true");
 });
 
 test("disables a waiting-gate decision when its authoritative artifact is absent", async () => {
@@ -199,10 +208,10 @@ test("disables a waiting-gate decision when its authoritative artifact is absent
 
   await user.click(await screen.findByText("run-12345678"));
 
-  expect(screen.getByLabelText("Exact plan decision artifact SHA-256")).toHaveTextContent("Unavailable");
+  expect(screen.getByText(/authoritative decision artifact is unavailable/i)).toBeVisible();
   expect(screen.getByRole("button", { name: "Approve" })).toBeDisabled();
-  expect(screen.getByRole("button", { name: "Needs revision" })).toBeDisabled();
-  expect(screen.getByRole("button", { name: "Cancel workflow" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Needs refinement" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
 });
 
 test("manages revision and cancellation from the centralized workflow controls", async () => {
@@ -211,14 +220,15 @@ test("manages revision and cancellation from the centralized workflow controls",
   render(<App client={client({ decide })} />);
 
   await user.click(await screen.findByText("run-12345678"));
-  await user.type(screen.getByRole("textbox", { name: "Rationale for revision or cancellation" }), "Evidence needs another review.");
-  await user.click(screen.getByRole("button", { name: "Needs revision" }));
+  await user.click(screen.getByRole("button", { name: "Needs refinement" }));
+  await user.type(screen.getByRole("textbox", { name: "Decision rationale" }), "Evidence needs another review.");
+  await user.click(screen.getByRole("button", { name: "Confirm refinement" }));
   expect(decide).toHaveBeenCalledWith(run, "request_revision", "Evidence needs another review.", undefined);
 
-  await user.click(screen.getByRole("button", { name: "Cancel workflow" }));
-  expect(screen.getByRole("button", { name: "Confirm cancel workflow" })).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(screen.getByRole("button", { name: "Confirm cancel" })).toBeVisible();
   expect(decide).toHaveBeenCalledTimes(1);
-  await user.click(screen.getByRole("button", { name: "Confirm cancel workflow" }));
+  await user.click(screen.getByRole("button", { name: "Confirm cancel" }));
   expect(decide).toHaveBeenLastCalledWith(run, "reject", "Evidence needs another review.", undefined);
 });
 
@@ -240,7 +250,7 @@ test("combines authoritative audit activity and verified specifications in one w
   expect(screen.getByRole("heading", { name: "Workflow audit activity" })).toBeVisible();
   expect(screen.getByText(/Durable lifecycle, agent, and approval events/)).toBeVisible();
   expect(screen.queryByText("Execution log")).not.toBeInTheDocument();
-  expect(screen.getByRole("heading", { name: "Specifications & immutable evidence" })).toBeVisible();
+  expect(screen.getByRole("heading", { name: "Workflow specification workspace" })).toBeVisible();
 });
 
 test("keeps the centralized audit log while phase context changes", async () => {
@@ -263,8 +273,8 @@ test("keeps active workflow decisions available while phase evidence changes", a
   await user.click(screen.getByRole("button", { name: "Focus Specification" }));
   expect(screen.getByLabelText("Selected workflow phase")).toHaveTextContent("Specification");
   expect(screen.getByRole("button", { name: "Approve" })).toBeVisible();
-  expect(screen.getByRole("button", { name: "Needs revision" })).toBeVisible();
-  expect(screen.getByRole("button", { name: "Cancel workflow" })).toBeVisible();
+  expect(screen.getByRole("button", { name: "Needs refinement" })).toBeVisible();
+  expect(screen.getByRole("button", { name: "Cancel" })).toBeVisible();
 });
 
 test("keeps product-specification controls available while any workflow phase is selected", async () => {
@@ -293,10 +303,11 @@ test("submits a complete edited product specification against its displayed dige
 
   await user.click(await screen.findByText("run-12345678"));
   await user.click(screen.getByRole("button", { name: "Focus Product specification" }));
-  await user.click(screen.getByRole("button", { name: "Edit product specification" }));
-  const editor = await screen.findByRole("textbox", { name: "Complete product specification JSON" });
+  const editor = await screen.findByRole("textbox", { name: "Editable product specification JSON" });
   fireEvent.change(editor, { target: { value: '{"title":"reviewed"}' } });
-  await user.click(screen.getByRole("button", { name: "Record revised specification" }));
+  await user.click(screen.getByRole("button", { name: "Accept specification edit" }));
+  expect(screen.getByRole("dialog", { name: "Confirm product specification revision" })).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "Confirm revised specification" }));
 
   expect(reviseProductSpecification).toHaveBeenCalledWith(refinementRun, { revision: 1, artifactSha256: specificationDigest }, { title: "reviewed" });
 });
@@ -311,12 +322,12 @@ test("keeps an invalid server-rejected revision in the editor for correction", a
 
   await user.click(await screen.findByText("run-12345678"));
   await user.click(screen.getByRole("button", { name: "Focus Product specification" }));
-  await user.click(screen.getByRole("button", { name: "Edit product specification" }));
-  const editor = await screen.findByRole("textbox", { name: "Complete product specification JSON" });
+  const editor = await screen.findByRole("textbox", { name: "Editable product specification JSON" });
   fireEvent.change(editor, { target: { value: '{"title":"reviewed"}' } });
-  await user.click(screen.getByRole("button", { name: "Record revised specification" }));
+  await user.click(screen.getByRole("button", { name: "Accept specification edit" }));
+  await user.click(screen.getByRole("button", { name: "Confirm revised specification" }));
 
-  expect(screen.getByRole("textbox", { name: "Complete product specification JSON" })).toHaveValue('{"title":"reviewed"}');
+  expect(screen.getByRole("textbox", { name: "Editable product specification JSON" })).toHaveValue('{"title":"reviewed"}');
   expect(screen.getByText("Authoritative API request failed (422)")).toBeVisible();
 });
 
@@ -330,7 +341,7 @@ test("does not present refinement controls after planning has advanced", async (
   await user.click(await screen.findByText("run-12345678"));
   await user.click(screen.getByRole("button", { name: "Focus Product specification" }));
   expect(screen.getByText("This product specification is immutable because the run is no longer in refinement.")).toBeVisible();
-  expect(screen.queryByRole("button", { name: "Edit product specification" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("textbox", { name: "Editable product specification JSON" })).not.toBeInTheDocument();
 });
 
 test("requires an authoritative positive revision before offering product specification actions", async () => {
@@ -344,7 +355,7 @@ test("requires an authoritative positive revision before offering product specif
   await user.click(screen.getByRole("button", { name: "Focus Product specification" }));
 
   expect(screen.getByText("The displayed product specification revision is unavailable. Refresh the run before editing or selecting it.")).toBeVisible();
-  expect(screen.queryByRole("button", { name: "Edit product specification" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("textbox", { name: "Editable product specification JSON" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Select product specification" })).not.toBeInTheDocument();
 });
 
@@ -359,103 +370,54 @@ test("shows selected phase facts in the consolidated workflow control center", a
   expect(phase).toHaveTextContent("authoritative");
 });
 
-test("renders verified plan phases and acceptance criteria for product review", async () => {
-  const user = userEvent.setup();
-  const plan = JSON.stringify({
-    title: "Protect customer API traffic",
-    summary: "Add bounded rate limiting before releasing the gateway change.",
-    phases: [{
-      id: "phase-1",
-      name: "Rate limiter",
-      description: "Add the limit policy.",
-      acceptance_criteria: ["Requests over the limit receive a clear response."]
-    }]
-  });
-  render(<App client={client({ getEvidence: async () => ({ content: plan, sha256: digest }) })} />);
-
-  await user.click(await screen.findByText("run-12345678"));
-
-  expect(await screen.findByRole("heading", { name: "Protect customer API traffic" })).toBeVisible();
-  expect(screen.getByText("Rate limiter")).toBeVisible();
-  expect(screen.getAllByText(/Requests over the limit receive a clear response/)).toHaveLength(2);
-  expect(JSON.parse(screen.getByLabelText("Verified evidence").textContent ?? "")).toEqual(JSON.parse(plan));
-});
-
-test("expands selected immutable evidence by default and toggles it from its artifact button", async () => {
+test("keeps only specification references in the workflow workspace", async () => {
   const user = userEvent.setup();
   render(<App client={client()} />);
 
   await user.click(await screen.findByText("run-12345678"));
-  const evidenceButton = screen.getByRole("button", { name: `plan ${digest.slice(0, 12)}` });
-  expect(await screen.findByLabelText("Verified evidence")).toBeVisible();
-  expect(evidenceButton).toHaveAttribute("aria-expanded", "true");
-  await user.click(evidenceButton);
+
+  expect(screen.getByRole("button", { name: `Specification ${digest.slice(0, 12)}` })).toBeVisible();
+  expect(screen.queryByRole("button", { name: `plan ${digest.slice(0, 12)}` })).not.toBeInTheDocument();
   expect(screen.queryByLabelText("Verified evidence")).not.toBeInTheDocument();
-  expect(evidenceButton).toHaveAttribute("aria-expanded", "false");
-  await user.click(evidenceButton);
-  expect(await screen.findByLabelText("Verified evidence")).toBeVisible();
-  expect(evidenceButton).toHaveAttribute("aria-expanded", "true");
 });
 
-test("renders a product specification as separately verified evidence", async () => {
+test("updates the displayed digest when a specification reference is selected", async () => {
+  const user = userEvent.setup();
+  const specificationDigest = "c".repeat(64);
+  const refinedRun: Run = { ...run, artifacts: [{ kind: "source", sha256: digest }, { kind: "product_specification", sha256: specificationDigest }, { kind: "plan", sha256: digest }] };
+  render(<App client={client({ listRuns: async () => ({ runs: [refinedRun], revision: "refined", etag: "refined", unchanged: false }), getRun: async () => refinedRun })} />);
+
+  await user.click(await screen.findByText("run-12345678"));
+  const productSpecification = screen.getByRole("button", { name: `Product specification ${specificationDigest.slice(0, 12)}` });
+  await user.click(productSpecification);
+  expect(productSpecification).toHaveAttribute("aria-pressed", "true");
+  expect(screen.getByText(specificationDigest)).toBeVisible();
+});
+
+test("does not render the selected specification body in the workflow workspace", async () => {
   const user = userEvent.setup();
   const specificationDigest = "c".repeat(64);
   const refinedRun: Run = {
     ...run,
     artifacts: [{ kind: "source", sha256: digest }, { kind: "product_specification", sha256: specificationDigest }, { kind: "plan", sha256: digest }]
   };
-  render(<App client={client({ listRuns: async () => ({ runs: [refinedRun], revision: "refined", etag: "refined", unchanged: false }), getRun: async () => refinedRun, getEvidence: async (_runId, artifact) => ({ content: '{"unresolved_questions":[]}', sha256: artifact.sha256 }) })} />);
+  render(<App client={client({ listRuns: async () => ({ runs: [refinedRun], revision: "refined", etag: "refined", unchanged: false }), getRun: async () => refinedRun })} />);
 
   await user.click(await screen.findByText("run-12345678"));
   const evidence = screen.getByRole("button", { name: `Product specification ${specificationDigest.slice(0, 12)}` });
   await user.click(evidence);
 
-  expect(await screen.findByLabelText("Verified evidence")).toHaveTextContent("unresolved_questions");
+  expect(evidence).toHaveAttribute("aria-pressed", "true");
+  expect(screen.queryByLabelText("Verified evidence")).not.toBeInTheDocument();
 });
 
-test("records immutable review context without presenting it as execution control", async () => {
+test("removes reviewer-context controls from the specification workspace", async () => {
   const user = userEvent.setup();
-  const recordFeedback = jest.fn<ApiClient["recordFeedback"]>().mockResolvedValue({ feedback_id: "feedback-1", run_id: run.run_id, intent: "note", artifact_sha256: digest, stage_id: "plan_approval", actor_id: "operator", comment: "Clarify rollback.", created_at: "2026-08-02T00:00:00Z" });
-  render(<App client={client({ recordFeedback })} />);
+  render(<App client={client()} />);
 
   await user.click(await screen.findByText("run-12345678"));
-  await user.type(screen.getByLabelText("Context for reviewers"), "Clarify rollback.");
-  await user.click(screen.getByRole("button", { name: "Record context" }));
-
-  expect(recordFeedback).toHaveBeenCalledWith(run, { kind: "plan", sha256: digest }, "plan_approval", "Clarify rollback.");
-  expect(await screen.findByText(/Review context recorded/)).toBeVisible();
-});
-
-test("clears a recorded-context notice when the selected evidence digest changes", async () => {
-  const user = userEvent.setup();
-  const sourceDigest = "b".repeat(64);
-  const distinctEvidenceRun: Run = { ...run, artifacts: [{ kind: "source", sha256: sourceDigest }, { kind: "plan", sha256: digest }] };
-  const recordFeedback = jest.fn<ApiClient["recordFeedback"]>().mockResolvedValue({ feedback_id: "feedback-1", run_id: run.run_id, intent: "note", artifact_sha256: digest, stage_id: "plan_approval", actor_id: "operator", comment: "Clarify rollback.", created_at: "2026-08-02T00:00:00Z" });
-  render(<App client={client({ listRuns: async () => ({ runs: [distinctEvidenceRun], revision: "distinct-evidence", etag: "distinct-evidence", unchanged: false }), getRun: async () => distinctEvidenceRun, recordFeedback })} />);
-
-  await user.click(await screen.findByText("run-12345678"));
-  await user.type(screen.getByLabelText("Context for reviewers"), "Clarify rollback.");
-  await user.click(screen.getByRole("button", { name: "Record context" }));
-  expect(await screen.findByText(/Review context recorded at/)).toBeVisible();
-
-  await user.click(screen.getByRole("button", { name: `Specification ${sourceDigest.slice(0, 12)}` }));
-  expect(screen.queryByText(/Review context recorded at/)).not.toBeInTheDocument();
-});
-
-test("shows only notes bound to the selected stage and immutable digest", async () => {
-  const user = userEvent.setup();
-  const getFeedback = jest.fn<ApiClient["getFeedback"]>().mockResolvedValue([
-    { feedback_id: "feedback-matching", run_id: run.run_id, intent: "note", artifact_sha256: digest, stage_id: "plan_approval", actor_id: "owner", comment: "Shown note.", created_at: "2026-08-02T00:00:00Z" },
-    { feedback_id: "feedback-other-stage", run_id: run.run_id, intent: "note", artifact_sha256: digest, stage_id: "planning", actor_id: "owner", comment: "Hidden stage.", created_at: "2026-08-02T00:00:00Z" },
-    { feedback_id: "feedback-other-digest", run_id: run.run_id, intent: "note", artifact_sha256: "b".repeat(64), stage_id: "plan_approval", actor_id: "owner", comment: "Hidden digest.", created_at: "2026-08-02T00:00:00Z" }
-  ]);
-  render(<App client={client({ getFeedback })} />);
-
-  await user.click(await screen.findByText("run-12345678"));
-  expect(await screen.findByText(/Shown note\./)).toBeVisible();
-  expect(getFeedback).toHaveBeenCalledWith(run.run_id);
-  expect(screen.queryByText(/Hidden stage\./)).not.toBeInTheDocument();
-  expect(screen.queryByText(/Hidden digest\./)).not.toBeInTheDocument();
+  expect(screen.queryByLabelText("Context for reviewers")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Record context" })).not.toBeInTheDocument();
 });
 
 test("renders an authoritative in-progress stage as active", async () => {
