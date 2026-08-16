@@ -178,21 +178,23 @@ function SpecificationEvaluationSummary({ content, artifact }: { content: string
   } catch { return null; }
 }
 
+function jsonSyntax(content: string) {
+  const tokenPattern = /("(?:\\.|[^"\\])*")(?=\s*:)|("(?:\\.|[^"\\])*")|\b(true|false|null)\b|(-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?)/g;
+  const tokens = [];
+  let lastIndex = 0;
+  for (let match = tokenPattern.exec(content); match; match = tokenPattern.exec(content)) {
+    if (match.index > lastIndex) tokens.push(content.slice(lastIndex, match.index));
+    const tone = match[1] ? "json-key" : match[2] ? "json-string" : match[3] ? "json-literal" : "json-number";
+    tokens.push(<span className={tone} key={`${match.index}:${match[0]}`}>{match[0]}</span>);
+    lastIndex = match.index + match[0].length;
+  }
+  if (lastIndex < content.length) tokens.push(content.slice(lastIndex));
+  return tokens;
+}
+
 function prettyEvidence(content: string) {
-  try {
-    const formatted = JSON.stringify(JSON.parse(content), null, 2);
-    const tokenPattern = /("(?:\\.|[^"\\])*")(?=\s*:)|("(?:\\.|[^"\\])*")|\b(true|false|null)\b|(-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?)/g;
-    const tokens = [];
-    let lastIndex = 0;
-    for (let match = tokenPattern.exec(formatted); match; match = tokenPattern.exec(formatted)) {
-      if (match.index > lastIndex) tokens.push(formatted.slice(lastIndex, match.index));
-      const tone = match[1] ? "json-key" : match[2] ? "json-string" : match[3] ? "json-literal" : "json-number";
-      tokens.push(<span className={tone} key={`${match.index}:${match[0]}`}>{match[0]}</span>);
-      lastIndex = match.index + match[0].length;
-    }
-    if (lastIndex < formatted.length) tokens.push(formatted.slice(lastIndex));
-    return tokens;
-  } catch { return content; }
+  try { return jsonSyntax(JSON.stringify(JSON.parse(content), null, 2)); }
+  catch { return content; }
 }
 
 function trapDialogFocus(event: React.KeyboardEvent<HTMLElement>, close: () => void) {
@@ -307,7 +309,7 @@ function ProductSpecificationControls({ client, run, onComplete, showHeading = t
     {mutable && artifact && hasMutableRevision && !run.specification_evaluation_readiness && <button className="button-primary" disabled={pending} aria-busy={pending} onClick={() => void act(() => client.evaluateProductSpecification(run.run_id), "Evaluation recorded. Review its readiness before selecting this specification.")}>{pending ? "Evaluating…" : "Evaluate product specification"}</button>}
     {run.specification_evaluation_readiness === "needs_revision" && <><p className="evidence-error" role="alert">Evaluation requires a revised product specification before planning can continue, unless an authorized operator records an explicit exception.</p><label className="form-field" htmlFor="evaluation-waiver-rationale"><span>Waiver rationale</span><textarea id="evaluation-waiver-rationale" className="form-textarea" value={waiverRationale} onChange={(event) => setWaiverRationale(event.target.value)} maxLength={2000} placeholder="Explain why the evaluation finding is accepted…" /></label><div className="form-actions"><button className="button-secondary" disabled={pending || !waiverRationale.trim()} aria-busy={pending} onClick={() => void act(() => client.waiveSpecificationEvaluation(run, waiverRationale), "Evaluation waiver recorded. Review and select this specification before planning.")}>{pending ? "Recording…" : "Record evaluation waiver"}</button></div></>}
     {run.specification_evaluation_readiness === "waived" && <div className="sync-row" role="status">{run.specification_evaluation_waiver ? <>Evaluation waiver recorded by <b>{run.specification_evaluation_waiver.actor_id}</b> on {new Date(run.specification_evaluation_waiver.created_at).toLocaleString()}: {run.specification_evaluation_waiver.rationale}</> : "An authorized evaluation waiver is recorded for this specification."}</div>}
-    {mutable && artifact && hasMutableRevision && <div className="specification-editor"><label className="form-field" htmlFor="product-specification-revision"><span>Editable product specification JSON</span><div className="syntax-textarea"><pre ref={syntaxLayerRef} aria-hidden="true" className="evidence-json syntax-textarea-layer">{prettyEvidence(revisionText)}</pre><textarea id="product-specification-revision" className="form-textarea syntax-textarea-input" value={revisionText} onChange={(event) => { setRevisionText(event.target.value); setRevisionDirty(true); }} onScroll={(event) => syntaxLayerRef.current?.scrollTo({ top: event.currentTarget.scrollTop, left: event.currentTarget.scrollLeft })} aria-describedby="product-specification-revision-help" disabled={loadingRevision || pending} /></div></label><p id="product-specification-revision-help" className="form-help">Edit the complete JSON here. Accepting creates a new immutable revision after confirmation and server validation.</p><div className="form-actions"><button ref={revisionTriggerRef} className="button-primary" disabled={revisionStale || loadingRevision || pending || !revisionText} onClick={confirmRevision}>{loadingRevision ? "Loading specification…" : "Accept specification edit"}</button>{revisionStale && <button className="button-secondary" disabled={pending} onClick={() => { setRevisionDirty(false); setRevisionStale(false); setRevisionReload((value) => value + 1); }}>Reload latest specification</button>}</div></div>}
+    {mutable && artifact && hasMutableRevision && <div className="specification-editor"><label className="form-field" htmlFor="product-specification-revision"><span>Editable product specification JSON</span><div className="syntax-textarea"><pre ref={syntaxLayerRef} aria-hidden="true" className="evidence-json syntax-textarea-layer">{jsonSyntax(revisionText)}</pre><textarea id="product-specification-revision" className="form-textarea syntax-textarea-input" value={revisionText} onChange={(event) => { setRevisionText(event.target.value); setRevisionDirty(true); }} onScroll={(event) => syntaxLayerRef.current?.scrollTo({ top: event.currentTarget.scrollTop, left: event.currentTarget.scrollLeft })} aria-describedby="product-specification-revision-help" disabled={loadingRevision || pending} /></div></label><p id="product-specification-revision-help" className="form-help">Edit the complete JSON here. Accepting creates a new immutable revision after confirmation and server validation.</p><div className="form-actions"><button ref={revisionTriggerRef} className="button-primary" disabled={revisionStale || loadingRevision || pending || !revisionText} onClick={confirmRevision}>{loadingRevision ? "Loading specification…" : "Accept specification edit"}</button>{revisionStale && <button className="button-secondary" disabled={pending} onClick={() => { setRevisionDirty(false); setRevisionStale(false); setRevisionReload((value) => value + 1); }}>Reload latest specification</button>}</div></div>}
     {mutable && artifact && hasMutableRevision && !selected && (run.specification_evaluation_readiness === "ready" || run.specification_evaluation_readiness === "waived") && <button className="button-primary" disabled={pending} aria-busy={pending} onClick={() => void act(() => client.selectProductSpecification(run), "Product specification selected for planning.")}>{pending ? "Selecting…" : "Select product specification"}</button>}
     {mutable && selected && <button className="button-primary" disabled={pending} aria-busy={pending} onClick={() => void act(() => client.generatePlan(run.run_id), "Plan generated. Review the immutable plan before approval.")}>{pending ? "Generating plan…" : "Generate plan"}</button>}
     {selected && <p className="sync-row" role="status">Product specification revision {run.selected_product_specification_revision} is selected for planning.</p>}
