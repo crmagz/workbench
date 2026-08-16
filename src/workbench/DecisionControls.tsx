@@ -40,10 +40,11 @@ export function McpCapabilityEvidence({ run }: { run: Run }) {
   </section>;
 }
 
-export function DecisionControls({ client, run, onComplete, onSuccess }: { client: ApiClient; run: Run; onComplete: () => Promise<void | boolean>; onSuccess?: () => void }) {
+export function DecisionControls({ client, run, onComplete, onSuccess, workflowLabels = false }: { client: ApiClient; run: Run; onComplete: () => Promise<void | boolean>; onSuccess?: () => void; workflowLabels?: boolean }) {
   const [comment, setComment] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const [confirmingCancel, setConfirmingCancel] = useState(false);
   const mounted = useRef(false);
   const artifact = run.active_gate ? run.artifacts.find((item) => item.kind === run.active_gate) : null;
   const capabilities = run.active_gate === "plan" && isDisplaySafeCapabilities(run.mcp_capabilities) ? run.mcp_capabilities : null;
@@ -86,20 +87,20 @@ export function DecisionControls({ client, run, onComplete, onSuccess }: { clien
   if (run.active_gate === "plan" && capabilities?.state === "approved") return <McpCapabilityEvidence run={run} />;
   return (
     <section aria-label="Approval decision" className="decision-panel">
-      <h3>{run.active_gate} approval gate</h3>
+      <h3>{workflowLabels ? "Workflow decision" : `${run.active_gate} approval gate`}</h3>
       <p className="decision-artifact">
         <span>Exact decision artifact SHA-256</span>
         <code aria-label={`Exact ${run.active_gate} decision artifact SHA-256`}>{artifact?.sha256 ?? "Unavailable"}</code>
       </p>
       {!artifact && <p className="evidence-error" role="alert">The authoritative decision artifact is unavailable; no action can be submitted.</p>}
       {capabilities && <McpCapabilityEvidence run={run} />}
-      <label className="form-field" htmlFor="decision-comment"><span>Rationale for rejection or revision</span>
+      <label className="form-field" htmlFor="decision-comment"><span>Rationale for {workflowLabels ? "revision or cancellation" : "rejection or revision"}</span>
         <textarea className="form-textarea" id="decision-comment" value={comment} onChange={(event) => setComment(event.target.value)} />
       </label>
       <div className="form-actions decision-actions">
         <button className="button-primary" disabled={pending || !artifact} onClick={() => void decide("approve")}>Approve</button>
-        <button className="button-secondary" disabled={pending || !artifact} onClick={() => void decide("request_revision")}>Request revision</button>
-        <button className="button-secondary" disabled={pending || !artifact} onClick={() => void decide("reject")}>Reject</button>
+        <button className="button-secondary" disabled={pending || !artifact} onClick={() => void decide("request_revision")}>{workflowLabels ? "Needs revision" : "Request revision"}</button>
+        {workflowLabels ? confirmingCancel ? <><button className="button-danger" disabled={pending || !artifact} onClick={() => void decide("reject")}>Confirm cancel workflow</button><button className="button-secondary" disabled={pending} onClick={() => setConfirmingCancel(false)}>Keep workflow</button></> : <button className="button-danger" disabled={pending || !artifact} onClick={() => setConfirmingCancel(true)}>Cancel workflow</button> : <button className="button-secondary" disabled={pending || !artifact} onClick={() => void decide("reject")}>Reject</button>}
       </div>
       <p aria-live="polite">{message}</p>
     </section>
