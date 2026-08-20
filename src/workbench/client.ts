@@ -37,7 +37,7 @@ export type Feedback = { feedback_id: string; run_id: string; intent: "note"; ar
 export type Stage = {
   stage_id: string;
   label: string;
-  state: "completed" | "in_progress" | "awaiting_operator" | "needs_revision" | "failed" | "unavailable" | "cancelled";
+  state: "completed" | "queued" | "in_progress" | "awaiting_operator" | "needs_revision" | "failed" | "unavailable" | "cancelled";
   availability: "authoritative" | "unavailable";
   reason: string;
   artifact_kind: Artifact["kind"] | null;
@@ -76,6 +76,7 @@ export type Run = {
   approval_history_available: boolean;
   approval_history: Approval[];
   execution: Execution | null;
+  failure_summary?: string | null;
   external_links: ExternalLink[];
   // Omitted by older API releases and withheld entirely for non-approvers.
   mcp_capabilities?: McpCapabilities | null;
