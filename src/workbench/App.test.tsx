@@ -30,6 +30,55 @@ test("migrates the legacy stored theme preference", async () => {
   expect(window.localStorage.getItem("workbench-theme")).toBe("dark");
 });
 
+test("shows a persisted terminal failure reason in workflow audit activity", async () => {
+  const failedRun: Run = {
+    ...run,
+    status: "planning_failed",
+    active_gate: null,
+    failure_summary: "Execution workspace could not load the selected specification package.",
+    stages: stages.map((stage) => stage.stage_id === "planning" ? { ...stage, state: "failed" } : stage),
+  };
+  const failedEvents: TimelineEvent[] = [{
+    ...events[0],
+    event_id: "event-failed",
+    event_type: "run_status_changed",
+    lifecycle_status: "FAILED",
+    stage_id: "planning",
+    stage_ids: ["planning"],
+  }];
+  const user = userEvent.setup();
+  render(<App client={client({
+    listRuns: async () => ({ runs: [failedRun], revision: "runs", etag: "runs", unchanged: false }),
+    getRun: async () => failedRun,
+    getTimeline: async () => ({ events: failedEvents, revision: "timeline", etag: "timeline", unchanged: false }),
+  })} />);
+
+  await user.click(await screen.findByText(failedRun.workflow_id!));
+  expect(await screen.findByRole("alert")).toHaveTextContent("Execution workspace could not load the selected specification package.");
+  expect(screen.getByRole("heading", { name: "Workflow audit activity" })).toBeVisible();
+});
+
+test("keeps the completed evaluation in focus after specification acceptance", async () => {
+  const acceptedStages: Run["stages"] = [
+    { stage_id: "specification", label: "Specification", state: "completed", availability: "authoritative", reason: "Recorded.", artifact_kind: "source" },
+    { stage_id: "product_specification", label: "Product specification", state: "completed", availability: "authoritative", reason: "Accepted.", artifact_kind: "product_specification" },
+    { stage_id: "specification_evaluation", label: "Specification evaluation", state: "completed", availability: "authoritative", reason: "Recorded.", artifact_kind: "specification_evaluation" },
+    { stage_id: "planning", label: "Planning", state: "awaiting_operator", availability: "authoritative", reason: "Proceed when ready.", artifact_kind: null },
+  ];
+  const acceptedRun: Run = {
+    ...run,
+    active_gate: null,
+    artifacts: [{ kind: "source", sha256: digest }, { kind: "product_specification", sha256: digest }, { kind: "specification_evaluation", sha256: digest }],
+    stages: acceptedStages,
+    workflow_graph: { nodes: acceptedStages.map((stage) => ({ ...stage, node_type: stage.stage_id === "planning" ? "agent" : "queue" })), edges: acceptedStages.slice(1).map((stage, index) => ({ source_node_id: acceptedStages[index].stage_id, target_node_id: stage.stage_id, style: "solid", emphasis: "primary" })) },
+  };
+  const user = userEvent.setup();
+  render(<App client={client({ listRuns: async () => ({ runs: [acceptedRun], revision: "runs", etag: "runs", unchanged: false }), getRun: async () => acceptedRun })} />);
+
+  await user.click(await screen.findByText(acceptedRun.workflow_id!));
+  expect(await screen.findByRole("heading", { name: "Specification evaluation" })).toBeVisible();
+});
+
 test("renders project-scoped agent operations without offering execution controls", async () => {
   const agent = {
     registration_id: "developer", registration_version: "1.0.0", manifest_sha256: "b".repeat(64), component_id: "developer", component_version: "1.0.0", lifecycle: "active", maturity: "active", execution_class: "adapter", owner: "cogito-platform", capabilities: ["develop"],
@@ -321,6 +370,8 @@ test("confirms acceptance or continues editing a product specification", async (
   await user.click(screen.getByRole("button", { name: "Accept" }));
   await user.click(screen.getByRole("button", { name: "Confirm specification" }));
   expect(acceptProductSpecification).toHaveBeenCalledWith(refinementRun);
+  expect(screen.queryByRole("dialog", { name: "Confirm specification" })).not.toBeInTheDocument();
+  expect(screen.getByRole("status")).toHaveTextContent("Planning agent is generating the immutable plan.");
 });
 
 test("keeps an invalid server-rejected revision in the editor for correction", async () => {
