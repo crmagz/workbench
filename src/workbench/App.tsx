@@ -67,7 +67,7 @@ function filterRun(run: Run, filter: InboxFilter, search: string) {
   const searchable = `${run.run_id} ${run.workflow_id ?? ""} ${run.project_id} ${run.status}`.toLowerCase();
   if (search && !searchable.includes(search.toLowerCase())) return false;
   if (filter === "waiting") return isWaiting(run);
-  if (filter === "running") return run.status.includes("running");
+  if (filter === "running") return run.stages?.some((stage) => stage.state === "in_progress") ?? false;
   if (filter === "completed") return run.status.includes("completed");
   if (filter === "failed") return run.status.includes("failed") || run.status.includes("rejected");
   return true;
@@ -96,7 +96,7 @@ function MissionControl({ runs, onOpen, refresh, refreshing, syncMessage }: { ru
   const [filter, setFilter] = useState<InboxFilter>("all");
   const [search, setSearch] = useState("");
   const filtered = runs.filter((run) => filterRun(run, filter, search));
-  const counts: Record<InboxFilter, number> = { all: runs.length, waiting: runs.filter(isWaiting).length, running: runs.filter((run) => run.status.includes("running")).length, completed: runs.filter((run) => run.status.includes("completed")).length, failed: runs.filter((run) => run.status.includes("failed") || run.status.includes("rejected")).length };
+  const counts: Record<InboxFilter, number> = { all: runs.length, waiting: runs.filter(isWaiting).length, running: runs.filter((run) => run.stages?.some((stage) => stage.state === "in_progress") ?? false).length, completed: runs.filter((run) => run.status.includes("completed")).length, failed: runs.filter((run) => run.status.includes("failed") || run.status.includes("rejected")).length };
   const active = runs.filter((run) => run.active_gate !== null || run.status.includes("planning") || run.status.includes("implementing")).length;
   return <section className="view mission-view" aria-labelledby="mission-control-title">
     <header className="flow-header"><div><h1 id="mission-control-title">Mission Control</h1><p className="mission-meta"><span>{runs.length} workflows</span><span>{runs.filter((run) => run.workflow_id).length} execution identities</span></p></div><div className="kpis"><Kpi label="Active workflows" value={active} /><Kpi label="Total throughput" value="—" /><Kpi label="Avg success" value="—" /><Kpi label="Open alerts" value={counts.failed} /></div></header>
@@ -213,11 +213,25 @@ function EvidenceViewer({ client, run, initial, heading = "Verified immutable ev
 
 function WorkflowSpecificationWorkspace({ client, run, initial, heading, onComplete, onDecisionComplete }: { client: ApiClient; run: Run; initial?: Artifact["kind"]; heading: string; onComplete: () => Promise<void | boolean>; onDecisionComplete?: () => void }) {
   const specificationArtifacts = run.artifacts.filter((artifact) => artifact.kind === "source" || artifact.kind === "product_specification");
-  const initialArtifact = initial === "source" || initial === "product_specification" ? evidenceFor(run, initial) : null;
-  const [selected, setSelected] = useState<Artifact | null>(() => initialArtifact ?? specificationArtifacts[0] ?? null);
-  const sourceArtifact = evidenceFor(run, "source"); const productArtifact = evidenceFor(run, "product_specification");
-  useEffect(() => { setSelected((current) => { const currentKind = current?.kind; const replacement = currentKind === "source" ? sourceArtifact : currentKind === "product_specification" ? productArtifact : initialArtifact ?? specificationArtifacts[0] ?? null; return replacement ?? initialArtifact ?? specificationArtifacts[0] ?? null; }); }, [initialArtifact?.sha256, productArtifact?.sha256, run.run_id, sourceArtifact?.sha256]);
-  return <section className="workflow-specifications" aria-labelledby="workflow-specification-workspace-title"><div className="section-heading"><div><p className="eyebrow">Workflow specifications</p><h3 id="workflow-specification-workspace-title">{heading}</h3></div><small>Immutable specification references, edits, and active workflow decisions.</small></div><div className="workflow-specification-workspace"><div className="specification-artifact-selector"><div className="artifact-list">{specificationArtifacts.map((artifact) => <button key={`${artifact.kind}:${artifact.sha256}`} className={selected?.sha256 === artifact.sha256 ? "selected" : ""} aria-pressed={selected?.sha256 === artifact.sha256} onClick={() => setSelected(artifact)}><b>{artifactLabel(artifact.kind)}</b><small>{artifact.sha256.slice(0, 12)}</small></button>)}</div>{selected && <p className="control-note">Digest: <span className="mono">{selected.sha256}</span></p>}{!selected && <p className="control-note">No specification references are available for this run.</p>}</div>{specificationArtifacts.length > 0 && <ProductSpecificationControls client={client} run={run} onComplete={onComplete} showHeading={false} compact />}{run.active_gate && <DecisionControls client={client} run={run} onComplete={onComplete} onSuccess={onDecisionComplete} workflowLabels />}{run.active_gate !== "plan" && <McpCapabilityEvidence run={run} />}</div></section>;
+  return <section className="workflow-specifications" aria-labelledby="workflow-specification-workspace-title"><div className="section-heading"><div><p className="eyebrow">Workflow specifications</p><h3 id="workflow-specification-workspace-title">{heading}</h3></div><small>Submitted and product specifications remain visible while you make a workflow decision.</small></div><div className="workflow-specification-workspace"><SpecificationEvidencePanes client={client} run={run} artifacts={specificationArtifacts} initial={initial} />{specificationArtifacts.length > 0 && <ProductSpecificationControls client={client} run={run} onComplete={onComplete} showHeading={false} compact />}{run.active_gate && <DecisionControls client={client} run={run} onComplete={onComplete} onSuccess={onDecisionComplete} workflowLabels />}{run.active_gate !== "plan" && <McpCapabilityEvidence run={run} />}</div></section>;
+}
+
+function SpecificationEvidencePanes({ client, run, artifacts, initial }: { client: ApiClient; run: Run; artifacts: Artifact[]; initial?: Artifact["kind"] }) {
+  const [content, setContent] = useState<Record<string, string>>({});
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let active = true;
+    setContent({}); setError(null);
+    if (artifacts.length === 0) return () => { active = false; };
+    void Promise.all(artifacts.map(async (artifact) => [artifact.sha256, (await client.getEvidence(run.run_id, artifact)).content] as const)).then((entries) => {
+      if (active) setContent(Object.fromEntries(entries));
+    }).catch((reason) => {
+      if (active) setError(reason instanceof Error ? reason.message : "Verified specification evidence is unavailable.");
+    });
+    return () => { active = false; };
+  }, [artifacts.map((artifact) => artifact.sha256).join(":"), client, initial, run.run_id]);
+  if (artifacts.length === 0) return <p className="control-note">No specification references are available for this run.</p>;
+  return <div className="specification-evidence-panes" aria-label="Full workflow specifications">{artifacts.map((artifact) => <section key={`${artifact.kind}:${artifact.sha256}`} className="specification-evidence-pane"><header><div><p className="eyebrow">{artifact.kind === "source" ? "Submitted specification" : "Product specification"}</p><h4>{artifactLabel(artifact.kind)}</h4></div><small className="mono">{artifact.sha256}</small></header>{content[artifact.sha256] ? <pre className="evidence-json" aria-label={`${artifactLabel(artifact.kind)} contents`}>{prettyEvidence(content[artifact.sha256])}</pre> : <p className="control-note" role="status">Loading full specification…</p>}</section>)}{error && <p className="evidence-error" role="alert">{error}</p>}</div>;
 }
 
 function ImmutableEvidenceViewer({ client, run, initial, heading }: { client: ApiClient; run: Run; initial?: Artifact["kind"]; heading: string }) {
@@ -236,33 +250,38 @@ function ImmutableEvidenceViewer({ client, run, initial, heading }: { client: Ap
 function ProductSpecificationControls({ client, run, onComplete, showHeading = true, compact = false }: { client: ApiClient; run: Run; onComplete: () => Promise<void | boolean>; showHeading?: boolean; compact?: boolean }) {
   const [pending, setPending] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [confirmingAcceptance, setConfirmingAcceptance] = useState(false);
+  const [confirmingCancellation, setConfirmingCancellation] = useState(false);
   const [revisionText, setRevisionText] = useState("");
   const [revisionDirty, setRevisionDirty] = useState(false);
   const [revisionStale, setRevisionStale] = useState(false);
   const [revisionReload, setRevisionReload] = useState(0);
   const [loadingRevision, setLoadingRevision] = useState(false);
-  const [confirmingRevision, setConfirmingRevision] = useState(false);
-  const [waiverRationale, setWaiverRationale] = useState("");
   const [revisionParent, setRevisionParent] = useState<{ revision: number; artifactSha256: string } | null>(null);
   const syntaxLayerRef = useRef<HTMLPreElement>(null);
+  const editorRef = useRef<HTMLTextAreaElement>(null);
   const revisionLoadRef = useRef(0);
-  const revisionDialogRef = useRef<HTMLElement>(null);
-  const revisionTriggerRef = useRef<HTMLButtonElement>(null);
+  const acceptanceDialogRef = useRef<HTMLElement>(null);
+  const acceptanceTriggerRef = useRef<HTMLButtonElement>(null);
+  const cancellationDialogRef = useRef<HTMLElement>(null);
+  const cancellationTriggerRef = useRef<HTMLButtonElement>(null);
   const artifact = evidenceFor(run, "product_specification");
   const selected = run.selected_product_specification_revision !== null && run.selected_product_specification_revision !== undefined;
   const mutable = run.status === "planning";
   const specificationRevision = run.product_specification_revision;
   const hasMutableRevision = typeof specificationRevision === "number" && Number.isInteger(specificationRevision) && specificationRevision >= 1;
-  const act = async (action: () => Promise<void>, message: string) => {
-    try { setPending(true); setNotice(null); await action(); const refreshed = await onComplete(); if (refreshed === false) { setNotice("Action was accepted, but the authoritative workflow could not be refreshed. Refresh before continuing."); return false; } setNotice(message); return true; }
+  const hasAction = (actionId: string) => run.available_actions?.some((action) => action.action_id === actionId) ?? false;
+  const act = async (action: () => Promise<void>, message: string, pendingMessage?: string) => {
+    try { setPending(true); setNotice(pendingMessage ?? null); await action(); const refreshed = await onComplete(); if (refreshed === false) { setNotice("Action was accepted, but the authoritative workflow could not be refreshed. Refresh before continuing."); return false; } setNotice(message); return true; }
     catch (reason) { setNotice(reason instanceof Error ? reason.message : "The product specification action could not be completed."); return false; }
     finally { setPending(false); }
   };
   useEffect(() => {
     const request = ++revisionLoadRef.current;
-    if (!mutable || !artifact || !hasMutableRevision || specificationRevision === undefined) return;
+    if (!editing || !mutable || !artifact || !hasMutableRevision || specificationRevision === undefined) return;
     if (revisionDirty && revisionParent && (revisionParent.revision !== specificationRevision || revisionParent.artifactSha256 !== artifact.sha256)) {
-      setRevisionStale(true); setConfirmingRevision(false); setLoadingRevision(false); setNotice("A newer product specification is available. Your unsaved edit is preserved; reload before accepting it.");
+      setRevisionStale(true); setLoadingRevision(false); setNotice("A newer product specification is available. Your unsaved edit is preserved; reload before saving it.");
       return;
     }
     setLoadingRevision(true); setNotice(null);
@@ -272,54 +291,66 @@ function ProductSpecificationControls({ client, run, onComplete, showHeading = t
       setRevisionText(JSON.stringify(parsed, null, 2));
       setRevisionParent({ revision: specificationRevision, artifactSha256: artifact.sha256 });
       setRevisionDirty(false); setRevisionStale(false);
-      setConfirmingRevision(false);
     }).catch((reason) => {
       if (request === revisionLoadRef.current) setNotice(reason instanceof Error ? reason.message : "The immutable product specification could not be loaded.");
     }).finally(() => { if (request === revisionLoadRef.current) setLoadingRevision(false); });
-  }, [artifact?.sha256, client, hasMutableRevision, mutable, revisionReload, run.run_id, specificationRevision]);
+  }, [artifact?.sha256, client, editing, hasMutableRevision, mutable, revisionReload, run.run_id, specificationRevision]);
+  useEffect(() => { if (editing && !loadingRevision) editorRef.current?.focus(); }, [editing, loadingRevision]);
   useEffect(() => {
-    if (!confirmingRevision) return;
-    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    revisionDialogRef.current?.querySelector<HTMLElement>("button:not([disabled]), textarea:not([disabled])")?.focus();
+    if (!confirmingAcceptance) return;
+    const previousFocus = acceptanceTriggerRef.current;
+    acceptanceDialogRef.current?.querySelector<HTMLElement>("button:not([disabled])")?.focus();
     return () => previousFocus?.focus();
-  }, [confirmingRevision]);
-  const confirmRevision = () => {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(revisionText);
-    } catch { setNotice("Enter a complete valid JSON product specification before submitting."); }
-    if (parsed !== undefined && revisionParent) setConfirmingRevision(true);
-  };
+  }, [confirmingAcceptance]);
+  useEffect(() => {
+    if (!confirmingCancellation) return;
+    const previousFocus = cancellationTriggerRef.current;
+    cancellationDialogRef.current?.querySelector<HTMLElement>("button:not([disabled])")?.focus();
+    return () => previousFocus?.focus();
+  }, [confirmingCancellation]);
   const submitRevision = async () => {
     if (revisionStale || !artifact || !revisionParent || revisionParent.revision !== specificationRevision || revisionParent.artifactSha256 !== artifact.sha256) {
-      setConfirmingRevision(false); setRevisionStale(true); setNotice("A newer product specification is available. Reload it before accepting an edit.");
+      setRevisionStale(true); setNotice("A newer product specification is available. Reload it before saving this revision.");
       return;
     }
     let parsed: unknown;
-    try { parsed = JSON.parse(revisionText); } catch { setNotice("Enter a complete valid JSON product specification before submitting."); setConfirmingRevision(false); }
-    if (parsed !== undefined && revisionParent) {
-      const recorded = await act(() => client.reviseProductSpecification(run, revisionParent, parsed), "Revision recorded. Review and select the new immutable evidence before planning.");
-      if (recorded) { setRevisionText(""); setConfirmingRevision(false); setRevisionParent(null); } else setConfirmingRevision(false);
-    }
+    try { parsed = JSON.parse(revisionText); } catch { setNotice("Enter a complete valid JSON product specification before saving."); return; }
+    const recorded = await act(() => client.reviseProductSpecification(run, revisionParent, parsed), "Refined specification saved. Review the new revision before accepting it.");
+    if (recorded) { setRevisionText(""); setRevisionParent(null); setEditing(false); }
   };
+  const accept = async () => {
+    setConfirmingAcceptance(false);
+    setEditing(false);
+    try {
+      setPending(true); setNotice("Specification evaluation accepted. Planning agent is generating the immutable plan.");
+      await client.acceptProductSpecification(run);
+      const refreshed = await onComplete();
+      if (refreshed === false) { setNotice("Acceptance was recorded, but the authoritative workflow could not be refreshed. Refresh before continuing."); return; }
+      setNotice("Specification accepted. Planning agent is generating the immutable plan.");
+    } catch (reason) { setNotice(reason instanceof Error ? reason.message : "The specification could not be accepted."); }
+    finally { setPending(false); }
+  };
+  const closeAcceptance = (continueEditing = false) => { setConfirmingAcceptance(false); if (continueEditing) setEditing(true); };
+  const cancel = async () => {
+    const cancelled = await act(() => client.cancelPlanningRun(run.run_id), "Run cancelled. No plan will be generated.");
+    if (cancelled) setConfirmingCancellation(false);
+  };
+  const closeCancellation = () => setConfirmingCancellation(false);
   return <section className={compact ? "product-specification-controls" : "card dossier-section"}>{showHeading && <h2 className="panel-title">Product specification</h2>}<div className={compact ? undefined : "dossier-section-body"}>
     {!mutable && <p className="control-note">This product specification is immutable because the run is no longer in refinement.</p>}
-    {mutable && artifact && !hasMutableRevision && <p className="control-note">The displayed product specification revision is unavailable. Refresh the run before editing or selecting it.</p>}
-    {mutable && !artifact && <button className="button-primary" disabled={pending} aria-busy={pending} onClick={() => void act(() => client.generateProductSpecification(run.run_id), "Draft generated. Review its verified evidence before evaluation.")}>{pending ? "Generating…" : "Generate product specification"}</button>}
-    {mutable && artifact && hasMutableRevision && !run.specification_evaluation_readiness && <button className="button-primary" disabled={pending} aria-busy={pending} onClick={() => void act(() => client.evaluateProductSpecification(run.run_id), "Evaluation recorded. Review its readiness before selecting this specification.")}>{pending ? "Evaluating…" : "Evaluate product specification"}</button>}
-    {run.specification_evaluation_readiness === "needs_revision" && <><p className="evidence-error" role="alert">Evaluation requires a revised product specification before planning can continue, unless an authorized operator records an explicit exception.</p><label className="form-field" htmlFor="evaluation-waiver-rationale"><span>Waiver rationale</span><textarea id="evaluation-waiver-rationale" className="form-textarea" value={waiverRationale} onChange={(event) => setWaiverRationale(event.target.value)} maxLength={2000} placeholder="Explain why the evaluation finding is accepted…" /></label><div className="form-actions"><button className="button-secondary" disabled={pending || !waiverRationale.trim()} aria-busy={pending} onClick={() => void act(() => client.waiveSpecificationEvaluation(run, waiverRationale), "Evaluation waiver recorded. Review and select this specification before planning.")}>{pending ? "Recording…" : "Record evaluation waiver"}</button></div></>}
-    {run.specification_evaluation_readiness === "waived" && <div className="sync-row" role="status">{run.specification_evaluation_waiver ? <>Evaluation waiver recorded by <b>{run.specification_evaluation_waiver.actor_id}</b> on {new Date(run.specification_evaluation_waiver.created_at).toLocaleString()}: {run.specification_evaluation_waiver.rationale}</> : "An authorized evaluation waiver is recorded for this specification."}</div>}
-    {mutable && artifact && hasMutableRevision && <div className="specification-editor"><label className="form-field" htmlFor="product-specification-revision"><span>Editable product specification JSON</span><div className="syntax-textarea"><pre ref={syntaxLayerRef} aria-hidden="true" className="evidence-json syntax-textarea-layer">{jsonSyntax(revisionText)}</pre><textarea id="product-specification-revision" className="form-textarea syntax-textarea-input" value={revisionText} onChange={(event) => { setRevisionText(event.target.value); setRevisionDirty(true); }} onScroll={(event) => syntaxLayerRef.current?.scrollTo({ top: event.currentTarget.scrollTop, left: event.currentTarget.scrollLeft })} aria-describedby="product-specification-revision-help" disabled={loadingRevision || pending} /></div></label><p id="product-specification-revision-help" className="form-help">Edit the complete JSON here. Accepting creates a new immutable revision after confirmation and server validation.</p><div className="form-actions"><button ref={revisionTriggerRef} className="button-primary" disabled={revisionStale || loadingRevision || pending || !revisionText} onClick={confirmRevision}>{loadingRevision ? "Loading specification…" : "Accept specification edit"}</button>{revisionStale && <button className="button-secondary" disabled={pending} onClick={() => { setRevisionDirty(false); setRevisionStale(false); setRevisionReload((value) => value + 1); }}>Reload latest specification</button>}</div></div>}
-    {mutable && artifact && hasMutableRevision && !selected && (run.specification_evaluation_readiness === "ready" || run.specification_evaluation_readiness === "waived") && <button className="button-primary" disabled={pending} aria-busy={pending} onClick={() => void act(() => client.selectProductSpecification(run), "Product specification selected for planning.")}>{pending ? "Selecting…" : "Select product specification"}</button>}
-    {mutable && selected && <button className="button-primary" disabled={pending} aria-busy={pending} onClick={() => void act(() => client.generatePlan(run.run_id), "Plan generated. Review the immutable plan before approval.")}>{pending ? "Generating plan…" : "Generate plan"}</button>}
-    {selected && <p className="sync-row" role="status">Product specification revision {run.selected_product_specification_revision} is selected for planning.</p>}
+    {mutable && artifact && !hasMutableRevision && <p className="control-note">The displayed product specification revision is unavailable. Refresh the run before editing or accepting it.</p>}
+    {mutable && !artifact && hasAction("generate_product_specification") && <div className="form-actions"><button className="button-primary" disabled={pending} aria-busy={pending} onClick={() => void act(() => client.generateProductSpecification(run.run_id), "Draft generated. Review it before accepting or refining it.", "Planner agent is generating the product specification. This stage will move to review when immutable evidence is recorded.")}>{pending ? "Planner agent running…" : "Proceed"}</button>{hasAction("cancel_planning_run") && <button ref={cancellationTriggerRef} className="button-danger" disabled={pending} onClick={() => setConfirmingCancellation(true)}>Cancel</button>}</div>}
+    {mutable && artifact && hasMutableRevision && hasAction("accept_product_specification") && <div className="form-actions"><button ref={acceptanceTriggerRef} className="button-primary" disabled={pending} onClick={() => setConfirmingAcceptance(true)}>Accept</button>{hasAction("refine_product_specification") && <button className="button-secondary" disabled={pending} onClick={() => setEditing(true)}>Needs refinement</button>}{hasAction("cancel_planning_run") && <button ref={cancellationTriggerRef} className="button-danger" disabled={pending} onClick={() => setConfirmingCancellation(true)}>Cancel</button>}</div>}
+    {mutable && artifact && hasMutableRevision && !selected && !editing && hasAction("refine_product_specification") && !hasAction("accept_product_specification") && <div className="form-actions"><button className="button-secondary" disabled={pending} onClick={() => setEditing(true)}>Needs refinement</button>{hasAction("cancel_planning_run") && <button ref={cancellationTriggerRef} className="button-danger" disabled={pending} onClick={() => setConfirmingCancellation(true)}>Cancel</button>}</div>}
+    {mutable && artifact && hasMutableRevision && editing && <div className="specification-editor"><label className="form-field" htmlFor="product-specification-revision"><span>Editable product specification JSON</span><div className="syntax-textarea"><pre ref={syntaxLayerRef} aria-hidden="true" className="evidence-json syntax-textarea-layer">{jsonSyntax(revisionText)}</pre><textarea ref={editorRef} id="product-specification-revision" className="form-textarea syntax-textarea-input" value={revisionText} onChange={(event) => { setRevisionText(event.target.value); setRevisionDirty(true); }} onScroll={(event) => syntaxLayerRef.current?.scrollTo({ top: event.currentTarget.scrollTop, left: event.currentTarget.scrollLeft })} aria-describedby="product-specification-revision-help" disabled={loadingRevision || pending} /></div></label><p id="product-specification-revision-help" className="form-help">Save a complete new revision for review. Saving does not accept the specification.</p><div className="form-actions"><button className="button-primary" disabled={revisionStale || loadingRevision || pending || !revisionText} onClick={() => void submitRevision()}>{loadingRevision ? "Loading specification…" : "Save refined specification"}</button>{revisionStale && <button className="button-secondary" disabled={pending} onClick={() => { setRevisionDirty(false); setRevisionStale(false); setRevisionReload((value) => value + 1); }}>Reload latest specification</button>}</div></div>}
+    {selected && <p className="sync-row" role="status">Product specification revision {run.selected_product_specification_revision} is accepted for planning.</p>}
     {notice && <p className="sync-row" role="status">{notice}</p>}
-  </div>{confirmingRevision && mutable && <div className="specification-edit-scrim" onMouseDown={() => !pending && setConfirmingRevision(false)}><section ref={revisionDialogRef} className="specification-edit-dialog" role="dialog" aria-modal="true" aria-labelledby="specification-edit-title" onMouseDown={(event) => event.stopPropagation()} onKeyDown={(event) => trapDialogFocus(event, () => !pending && setConfirmingRevision(false))} tabIndex={-1}><h3 id="specification-edit-title">Confirm product specification revision</h3><p>The edited JSON will be submitted as a new immutable revision for server validation.</p><div className="form-actions"><button className="button-primary" disabled={pending} aria-busy={pending} onClick={() => void submitRevision()}>{pending ? "Recording…" : "Confirm revised specification"}</button><button className="button-secondary" disabled={pending} onClick={() => setConfirmingRevision(false)}>Continue editing</button></div></section></div>}</section>;
+  </div>{confirmingAcceptance && mutable && <div className="specification-edit-scrim" onMouseDown={() => !pending && closeAcceptance()}><section ref={acceptanceDialogRef} className="specification-edit-dialog" role="dialog" aria-modal="true" aria-labelledby="specification-acceptance-title" onMouseDown={(event) => event.stopPropagation()} onKeyDown={(event) => trapDialogFocus(event, () => !pending && closeAcceptance())} tabIndex={-1}><h3 id="specification-acceptance-title">Confirm specification</h3><p>Accept this immutable revision as the planning contract. Evaluation findings are recorded for traceability, then planning starts automatically; choose Needs refinement only when you want to revise it.</p><div className="form-actions"><button className="button-primary" disabled={pending} aria-busy={pending} onClick={() => void accept()}>{pending ? "Planning agent running…" : "Confirm specification"}</button><button className="button-secondary" disabled={pending} onClick={() => closeAcceptance(true)}>Continue editing</button></div></section></div>}{confirmingCancellation && mutable && <div className="specification-edit-scrim" onMouseDown={() => !pending && closeCancellation()}><section ref={cancellationDialogRef} className="specification-edit-dialog" role="dialog" aria-modal="true" aria-labelledby="planning-cancellation-title" onMouseDown={(event) => event.stopPropagation()} onKeyDown={(event) => trapDialogFocus(event, () => !pending && closeCancellation())} tabIndex={-1}><h3 id="planning-cancellation-title">Cancel planning run</h3><p>This terminal action stops the run before a plan is generated. It cannot be resumed.</p><div className="form-actions"><button className="button-danger" disabled={pending} aria-busy={pending} onClick={() => void cancel()}>{pending ? "Cancelling…" : "Confirm cancel"}</button><button className="button-secondary" disabled={pending} onClick={closeCancellation}>Keep working</button></div></section></div>}</section>;
 }
 
 function Timeline({ events }: { events: TimelineEvent[] }) { return <section className="card"><h2 className="panel-title">Authoritative timeline</h2>{events.length === 0 ? <p className="control-note">No persisted lifecycle events are available yet.</p> : <div className="timeline">{events.map((event) => <div className="tl-item" key={event.event_id}><i /><span><b>{statusLabel(event.event_type)}</b><small>{new Date(event.occurred_at).toLocaleString()} · {event.gate ? `${event.gate} gate` : event.lifecycle_status ?? "lifecycle event"}{event.decision ? ` · ${event.decision}` : ""}{event.artifact_sha256 ? ` · ${event.artifact_sha256.slice(0, 12)}` : ""}</small></span><Pill status={event.delivered ? "delivered" : "pending"} label={event.delivered ? "delivered" : `${event.delivery_attempt_count} attempts`} /></div>)}</div>}</section>; }
 
-function stageTone(stage: Stage) { return stage.state === "failed" ? "err" : stage.state === "awaiting_operator" || stage.state === "needs_revision" ? "warn" : stage.state === "in_progress" ? "active" : stage.state === "completed" ? "run" : "idle"; }
+function stageTone(stage: Stage) { return stage.state === "failed" || stage.state === "cancelled" ? "err" : stage.state === "awaiting_operator" || stage.state === "needs_revision" ? "warn" : stage.state === "in_progress" ? "active" : stage.state === "completed" ? "run" : "idle"; }
 function relatedEvents(stage: Stage, events: TimelineEvent[]) {
   return events.filter((event) => (event.stage_ids?.length ? event.stage_ids : event.stage_id ? [event.stage_id] : []).includes(stage.stage_id)).slice(0, 3);
 }
@@ -386,6 +417,22 @@ function WorkflowMap({ run, timeline, onEvidence }: { run: Run; timeline: Timeli
   return <section className="workflow-map" aria-labelledby="workflow-map-title"><div className="canvas-toolbar"><span id="workflow-map-title">Workflow topology · typed server state</span><div><button aria-label="Zoom out" disabled={zoom === 60} onClick={() => setZoom((value) => Math.max(60, value - 10))}>−</button><span aria-live="polite">{zoom}%</span><button aria-label="Zoom in" disabled={zoom === 160} onClick={() => setZoom((value) => Math.min(160, value + 10))}>+</button><button aria-label="Fit workflow map" onClick={() => setZoom(100)}>⌗</button></div><span className="canvas-mode">authoritative</span></div><div className="workflow-map-layout"><div className="canvas-scroll"><div className="map-scale" data-zoom={zoom} style={{ width: `${Math.max(880, stages.length * 220) * zoom / 100}px` }}><div className="workflow-map-canvas" style={{ "--count": stages.length, transform: `scale(${zoom / 100})` } as React.CSSProperties}><div className="workflow-map-line" />{stages.map((stage) => <button key={stage.stage_id} className={`workflow-node ${stageTone(stage)} ${selected?.stage_id === stage.stage_id ? "selected" : ""}`} onClick={() => setSelectedStageId(stage.stage_id)} aria-label={`${stage.label}: ${statusLabel(stage.state)}, ${stage.availability}`}><span className="workflow-node-marker" /><span><b>{stage.label}</b><small>{statusLabel(stage.state)}</small></span><Pill status={stage.state} label={stage.availability} /></button>)}</div></div></div>{selected && <aside className="workflow-stage-panel" aria-label={`${selected.label} details`}><p className="eyebrow">Selected stage</p><div className="title-line"><h2>{selected.label}</h2><Pill status={selected.state} /></div><p>{selected.reason}</p><dl><dt>State source</dt><dd>{selected.availability}</dd>{selected.artifact_kind && <><dt>Evidence</dt><dd><button className="text-button" onClick={() => onEvidence(selected.artifact_kind!)}>{selected.artifact_kind}</button></dd></>}</dl>{relatedEvents(selected, timeline).length > 0 && <div className="timeline"><p className="eyebrow">Related events</p>{relatedEvents(selected, timeline).map((event) => <div className="tl-item" key={event.event_id}><i /><span><b>{statusLabel(event.event_type)}</b><small>{new Date(event.occurred_at).toLocaleString()}</small></span></div>)}</div>}</aside>}</div></section>;
 }
 
+function preferredWorkflowNodeId(nodes: PositionedWorkflowNode[], activeGate: Run["active_gate"]) {
+  const planning = nodes.find((node) => node.id === "planning");
+  const evaluation = nodes.find((node) => node.id === "specification_evaluation");
+  // Acceptance records evaluation and starts planning in one command. Keep
+  // the completed evaluation visible only until the planning agent begins.
+  if (planning?.status === "awaiting_operator" && evaluation?.status === "completed") return evaluation.id;
+  return nodes.find((node) => node.id === `${activeGate}_approval`)?.id
+    ?? nodes.find((node) => node.status === "in_progress")?.id
+    ?? nodes.find((node) => node.status === "queued")?.id
+    ?? nodes.find((node) => node.status === "awaiting_operator")?.id
+    ?? nodes.find((node) => node.status === "needs_revision")?.id
+    ?? nodes.find((node) => node.status === "failed")?.id
+    ?? nodes[0]?.id
+    ?? null;
+}
+
 function LifecycleRail({ nodes, focusedNodeId, onFocus, onVisualize }: { nodes: PositionedWorkflowNode[]; focusedNodeId: string | null; onFocus: (node: PositionedWorkflowNode) => void; onVisualize: () => void }) {
   return <section className="lifecycle-rail" aria-labelledby="lifecycle-rail-title">
     <div className="lifecycle-rail-heading"><p id="lifecycle-rail-title">Lifecycle</p><small>Authoritative stage projection</small></div>
@@ -409,9 +456,9 @@ function WorkflowControlCenter({ client, run, node, edges, timeline, onRefresh, 
   return <section className="workflow-control-center" aria-labelledby="workflow-control-center-title">
     <header className="workflow-control-heading"><div><p className="eyebrow">Workflow operator console</p><h2 id="workflow-control-center-title">Workflow control center</h2><p>One workspace for the selected phase, immutable specifications, durable audit activity, and operator decisions.</p></div><Pill status={node.status} label={`${node.name} · ${statusLabel(node.status)}`} /></header>
     {decisionNotice && <p className="sync-row" role="status">{decisionNotice}</p>}
-    <section className="phase-context" aria-label="Selected workflow phase"><div><p className="eyebrow">Selected phase</p><h3>{node.name}</h3><p>{node.reason}</p></div><dl><div><dt>Phase type</dt><dd>{node.type}</dd></div><div><dt>State source</dt><dd>{node.availability}</dd></div><div><dt>Evidence</dt><dd>{node.artifactKind ?? "Unavailable"}</dd></div><div><dt>Connected phases</dt><dd>{dependencies.length}</dd></div></dl></section>
+    <section className="phase-context" aria-label="Selected workflow phase"><div><p className="eyebrow">Selected phase</p><h3>{node.name}</h3><p>{node.reason}</p>{node.status === "failed" && run.failure_summary && <p className="evidence-error" role="alert"><b>Failure reason:</b> {run.failure_summary}</p>}</div><dl><div><dt>Phase type</dt><dd>{node.type}</dd></div><div><dt>State source</dt><dd>{node.availability}</dd></div><div><dt>Evidence</dt><dd>{node.artifactKind ?? "Unavailable"}</dd></div><div><dt>Connected phases</dt><dd>{dependencies.length}</dd></div></dl></section>
     <EvidenceViewer key={node.id} client={client} run={run} initial={node.artifactKind ?? undefined} heading="Workflow specification workspace" onComplete={onRefresh} onDecisionComplete={onDecisionComplete} workflowLabels />
-    <section className="workflow-audit card" aria-labelledby="workflow-audit-title"><div className="section-heading"><div><p className="eyebrow">Centralized audit log</p><h3 id="workflow-audit-title">Workflow audit activity</h3></div><small>Durable lifecycle, agent, and approval events — never raw agent output.</small></div>{timeline.length ? <ol>{timeline.map((event) => <li key={event.event_id} className={event.stage_ids.includes(node.id) ? "selected" : ""}><i /><div><b>{statusLabel(event.event_type)}</b><small>{event.stage_ids.length ? event.stage_ids.map(stageName).join(" · ") : event.gate ?? "workflow"} · {event.delivered ? "delivered" : "pending delivery"}</small></div><time dateTime={event.occurred_at}>{new Date(event.occurred_at).toLocaleString()}</time></li>)}</ol> : <p className="control-note">No durable workflow audit activity is available yet.</p>}</section>
+    <section className="workflow-audit card" aria-labelledby="workflow-audit-title"><div className="section-heading"><div><p className="eyebrow">Centralized audit log</p><h3 id="workflow-audit-title">Workflow audit activity</h3></div><small>Durable lifecycle, agent, and approval events — never raw agent output.</small></div>{timeline.length ? <ol>{timeline.map((event) => { const failureReason = event.lifecycle_status === "FAILED" ? run.failure_summary : null; return <li key={event.event_id} className={event.stage_ids.includes(node.id) ? "selected" : ""}><i /><div><b>{statusLabel(event.event_type)}</b><small>{event.stage_ids.length ? event.stage_ids.map(stageName).join(" · ") : event.gate ?? "workflow"} · {event.delivered ? "delivered" : "pending delivery"}</small>{failureReason && <p className="audit-failure" role="alert"><b>Failure reason:</b> {failureReason}</p>}</div><time dateTime={event.occurred_at}>{new Date(event.occurred_at).toLocaleString()}</time></li>; })}</ol> : <p className="control-note">No durable workflow audit activity is available yet.</p>}</section>
     {events.length > 0 && <p className="workflow-selection-note">Showing {events.length} audit event{events.length === 1 ? "" : "s"} related to the selected phase; the centralized log above retains the full workflow history.</p>}
   </section>;
 }
@@ -419,8 +466,9 @@ function WorkflowControlCenter({ client, run, node, edges, timeline, onRefresh, 
 function WorkflowCanvas({ client, run, timeline, onBack, onRefresh, decisionNotice, onDecisionComplete }: { client: ApiClient; run: Run; timeline: TimelineEvent[]; onBack: () => void; onRefresh: () => Promise<void | boolean>; decisionNotice: string | null; onDecisionComplete: () => void }) {
   const [visualizing, setVisualizing] = useState(false);
   const graph = graphFor(run);
-  const [focusedNodeId, setFocusedNodeId] = useState<string | null>(() => graph.nodes.find((node) => node.id === `${run.active_gate}_approval`)?.id ?? graph.nodes.find((node) => node.status === "in_progress")?.id ?? graph.nodes[0]?.id ?? null);
-  useEffect(() => { setVisualizing(false); setFocusedNodeId(graph.nodes.find((node) => node.id === `${run.active_gate}_approval`)?.id ?? graph.nodes.find((node) => node.status === "in_progress")?.id ?? graph.nodes[0]?.id ?? null); }, [run.run_id]);
+  const lifecycleRevision = graph.nodes.map((node) => `${node.id}:${node.status}`).join("|");
+  const [focusedNodeId, setFocusedNodeId] = useState<string | null>(() => preferredWorkflowNodeId(graph.nodes, run.active_gate));
+  useEffect(() => { setVisualizing(false); setFocusedNodeId(preferredWorkflowNodeId(graph.nodes, run.active_gate)); }, [lifecycleRevision, run.active_gate, run.run_id]);
   const focusNode = (node: PositionedWorkflowNode) => {
     setFocusedNodeId(node.id);
   };

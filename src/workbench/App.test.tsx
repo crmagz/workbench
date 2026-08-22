@@ -16,7 +16,7 @@ const events: TimelineEvent[] = [{ event_id: "event-1", event_type: "plan.awaiti
 const mcpGrant = { role: "developer", server_id: "github_readonly_mcp", server_version: "1.0.0", server_manifest_sha256: "b".repeat(64), tool_name: "catalog_read", input_schema_sha256: "c".repeat(64), repository_scope: "acme/api-gateway" };
 
 function client(overrides: Partial<ApiClient> = {}): ApiClient {
-  return { listProjects: async () => [{ project_id: "default" }], getHealth: async () => true, listRuns: async () => ({ runs: [run], revision: "runs", etag: "runs", unchanged: false }), getRun: async () => run, getTimeline: async () => ({ events, revision: "timeline", etag: "timeline", unchanged: false }), getEvidence: async () => ({ content: '{"title":"verified"}', sha256: digest }), getFeedback: async () => [], recordFeedback: async () => ({ feedback_id: "feedback-1", run_id: run.run_id, intent: "note", artifact_sha256: digest, stage_id: "planning", actor_id: "operator", comment: "Recorded note", created_at: "2026-08-02T00:00:00Z" }), decide: async () => undefined, generateProductSpecification: async () => undefined, evaluateProductSpecification: async () => undefined, waiveSpecificationEvaluation: async () => undefined, generatePlan: async () => undefined, selectProductSpecification: async () => undefined, reviseProductSpecification: async () => undefined, listAgents: async () => ({ agents: [], revision: "agents", etag: "agents", unchanged: false }), getAgent: async () => { throw new Error("agent unavailable"); }, listAgentInvocations: async () => ({ invocations: [], revision: "invocations", etag: "invocations", unchanged: false }), getAgentInvocation: async () => { throw new Error("invocation unavailable"); }, ...overrides };
+  return { listProjects: async () => [{ project_id: "default" }], getHealth: async () => true, listRuns: async () => ({ runs: [run], revision: "runs", etag: "runs", unchanged: false }), getRun: async () => run, getTimeline: async () => ({ events, revision: "timeline", etag: "timeline", unchanged: false }), getEvidence: async () => ({ content: '{"title":"verified"}', sha256: digest }), getFeedback: async () => [], recordFeedback: async () => ({ feedback_id: "feedback-1", run_id: run.run_id, intent: "note", artifact_sha256: digest, stage_id: "planning", actor_id: "operator", comment: "Recorded note", created_at: "2026-08-02T00:00:00Z" }), decide: async () => undefined, generateProductSpecification: async () => undefined, acceptProductSpecification: async () => ({ outcome: "accepted" }), cancelPlanningRun: async () => undefined, evaluateProductSpecification: async () => undefined, waiveSpecificationEvaluation: async () => undefined, generatePlan: async () => undefined, selectProductSpecification: async () => undefined, reviseProductSpecification: async () => undefined, listAgents: async () => ({ agents: [], revision: "agents", etag: "agents", unchanged: false }), getAgent: async () => { throw new Error("agent unavailable"); }, listAgentInvocations: async () => ({ invocations: [], revision: "invocations", etag: "agents", unchanged: false }), getAgentInvocation: async () => { throw new Error("agent unavailable"); }, ...overrides };
 }
 
 beforeEach(() => { window.history.replaceState({}, "", "/"); window.localStorage.clear(); });
@@ -28,6 +28,55 @@ test("migrates the legacy stored theme preference", async () => {
   expect(await screen.findByRole("heading", { name: "Mission Control" })).toBeVisible();
   expect(screen.getByRole("combobox", { name: "Theme" })).toHaveValue("dark");
   expect(window.localStorage.getItem("workbench-theme")).toBe("dark");
+});
+
+test("shows a persisted terminal failure reason in workflow audit activity", async () => {
+  const failedRun: Run = {
+    ...run,
+    status: "planning_failed",
+    active_gate: null,
+    failure_summary: "Execution workspace could not load the selected specification package.",
+    stages: stages.map((stage) => stage.stage_id === "planning" ? { ...stage, state: "failed" } : stage),
+  };
+  const failedEvents: TimelineEvent[] = [{
+    ...events[0],
+    event_id: "event-failed",
+    event_type: "run_status_changed",
+    lifecycle_status: "FAILED",
+    stage_id: "planning",
+    stage_ids: ["planning"],
+  }];
+  const user = userEvent.setup();
+  render(<App client={client({
+    listRuns: async () => ({ runs: [failedRun], revision: "runs", etag: "runs", unchanged: false }),
+    getRun: async () => failedRun,
+    getTimeline: async () => ({ events: failedEvents, revision: "timeline", etag: "timeline", unchanged: false }),
+  })} />);
+
+  await user.click(await screen.findByText(failedRun.workflow_id!));
+  expect(await screen.findByRole("alert")).toHaveTextContent("Execution workspace could not load the selected specification package.");
+  expect(screen.getByRole("heading", { name: "Workflow audit activity" })).toBeVisible();
+});
+
+test("keeps the completed evaluation in focus after specification acceptance", async () => {
+  const acceptedStages: Run["stages"] = [
+    { stage_id: "specification", label: "Specification", state: "completed", availability: "authoritative", reason: "Recorded.", artifact_kind: "source" },
+    { stage_id: "product_specification", label: "Product specification", state: "completed", availability: "authoritative", reason: "Accepted.", artifact_kind: "product_specification" },
+    { stage_id: "specification_evaluation", label: "Specification evaluation", state: "completed", availability: "authoritative", reason: "Recorded.", artifact_kind: "specification_evaluation" },
+    { stage_id: "planning", label: "Planning", state: "awaiting_operator", availability: "authoritative", reason: "Proceed when ready.", artifact_kind: null },
+  ];
+  const acceptedRun: Run = {
+    ...run,
+    active_gate: null,
+    artifacts: [{ kind: "source", sha256: digest }, { kind: "product_specification", sha256: digest }, { kind: "specification_evaluation", sha256: digest }],
+    stages: acceptedStages,
+    workflow_graph: { nodes: acceptedStages.map((stage) => ({ ...stage, node_type: stage.stage_id === "planning" ? "agent" : "queue" })), edges: acceptedStages.slice(1).map((stage, index) => ({ source_node_id: acceptedStages[index].stage_id, target_node_id: stage.stage_id, style: "solid", emphasis: "primary" })) },
+  };
+  const user = userEvent.setup();
+  render(<App client={client({ listRuns: async () => ({ runs: [acceptedRun], revision: "runs", etag: "runs", unchanged: false }), getRun: async () => acceptedRun })} />);
+
+  await user.click(await screen.findByText(acceptedRun.workflow_id!));
+  expect(await screen.findByRole("heading", { name: "Specification evaluation" })).toBeVisible();
 });
 
 test("renders project-scoped agent operations without offering execution controls", async () => {
@@ -281,36 +330,48 @@ test("keeps product-specification controls available while any workflow phase is
   const user = userEvent.setup();
   const generateProductSpecification = jest.fn<ApiClient["generateProductSpecification"]>().mockResolvedValue(undefined);
   const refinementStages: Run["stages"] = [{ stage_id: "specification", label: "Specification", state: "completed", availability: "authoritative", reason: "Stored.", artifact_kind: "source" }, { stage_id: "product_specification", label: "Product specification", state: "in_progress", availability: "authoritative", reason: "No draft.", artifact_kind: null }];
-  const refinementRun: Run = { ...run, status: "planning", active_gate: null, artifacts: [{ kind: "source", sha256: digest }], stages: refinementStages, workflow_graph: { nodes: refinementStages.map((stage) => ({ ...stage, node_type: "queue" })), edges: [{ source_node_id: "specification", target_node_id: "product_specification", style: "solid", emphasis: "primary" }] } };
+  const refinementRun: Run = { ...run, status: "planning", active_gate: null, artifacts: [{ kind: "source", sha256: digest }], stages: refinementStages, available_actions: [{ action_id: "generate_product_specification", stage_id: "product_specification", label: "Proceed", description: "Create a draft.", requires_confirmation: false }], workflow_graph: { nodes: refinementStages.map((stage) => ({ ...stage, node_type: "queue" })), edges: [{ source_node_id: "specification", target_node_id: "product_specification", style: "solid", emphasis: "primary" }] } };
   render(<App client={client({ listRuns: async () => ({ runs: [refinementRun], revision: "refinement", etag: "refinement", unchanged: false }), getRun: async () => refinementRun, generateProductSpecification })} />);
 
   await user.click(await screen.findByText("run-12345678"));
-  expect(screen.getByRole("button", { name: "Generate product specification" })).toBeVisible();
+  expect(screen.getByRole("button", { name: "Proceed" })).toBeVisible();
   await user.click(screen.getByRole("button", { name: "Focus Product specification" }));
-  expect(screen.getByRole("button", { name: "Generate product specification" })).toBeVisible();
-  await user.click(screen.getByRole("button", { name: "Generate product specification" }));
+  expect(screen.getByRole("button", { name: "Proceed" })).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "Proceed" }));
 
   expect(generateProductSpecification).toHaveBeenCalledWith("run-12345678");
 });
 
-test("submits a complete edited product specification against its displayed digest", async () => {
+test("confirms acceptance or continues editing a product specification", async () => {
   const user = userEvent.setup();
   const specificationDigest = "c".repeat(64);
   const reviseProductSpecification = jest.fn<ApiClient["reviseProductSpecification"]>().mockResolvedValue(undefined);
+  const acceptProductSpecification = jest.fn<ApiClient["acceptProductSpecification"]>().mockResolvedValue({ outcome: "accepted" });
   const refinementStages: Run["stages"] = [{ stage_id: "specification", label: "Specification", state: "completed", availability: "authoritative", reason: "Stored.", artifact_kind: "source" }, { stage_id: "product_specification", label: "Product specification", state: "awaiting_operator", availability: "authoritative", reason: "Review.", artifact_kind: "product_specification" }];
-  const refinementRun: Run = { ...run, status: "planning", active_gate: null, product_specification_revision: 1, artifacts: [{ kind: "source", sha256: digest }, { kind: "product_specification", sha256: specificationDigest }], stages: refinementStages, workflow_graph: { nodes: refinementStages.map((stage) => ({ ...stage, node_type: "queue" })), edges: [{ source_node_id: "specification", target_node_id: "product_specification", style: "solid", emphasis: "primary" }] } };
-  render(<App client={client({ listRuns: async () => ({ runs: [refinementRun], revision: "refinement", etag: "refinement", unchanged: false }), getRun: async () => refinementRun, getEvidence: async () => ({ content: '{"title":"draft"}', sha256: specificationDigest }), reviseProductSpecification })} />);
+  const refinementRun: Run = { ...run, status: "planning", active_gate: null, product_specification_revision: 1, artifacts: [{ kind: "source", sha256: digest }, { kind: "product_specification", sha256: specificationDigest }], stages: refinementStages, available_actions: [{ action_id: "accept_product_specification", stage_id: "product_specification", label: "Accept", description: "Validate and accept.", requires_confirmation: true }, { action_id: "refine_product_specification", stage_id: "product_specification", label: "Needs refinement", description: "Edit the draft.", requires_confirmation: false }, { action_id: "cancel_planning_run", stage_id: "product_specification", label: "Cancel", description: "Stop the run.", requires_confirmation: true }], workflow_graph: { nodes: refinementStages.map((stage) => ({ ...stage, node_type: "queue" })), edges: [{ source_node_id: "specification", target_node_id: "product_specification", style: "solid", emphasis: "primary" }] } };
+  render(<App client={client({ listRuns: async () => ({ runs: [refinementRun], revision: "refinement", etag: "refinement", unchanged: false }), getRun: async () => refinementRun, getEvidence: async () => ({ content: '{"title":"draft"}', sha256: specificationDigest }), reviseProductSpecification, acceptProductSpecification })} />);
 
   await user.click(await screen.findByText("run-12345678"));
   await user.click(screen.getByRole("button", { name: "Focus Product specification" }));
+  expect(await screen.findByLabelText("Specification contents")).toHaveTextContent('"title": "draft"');
+  expect(screen.getByLabelText("Product specification contents")).toHaveTextContent('"title": "draft"');
+  expect(screen.queryByRole("button", { name: "Evaluate product specification" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Select product specification" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Cancel" })).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "Accept" }));
+  expect(screen.getByRole("dialog", { name: "Confirm specification" })).toHaveTextContent("Accept this immutable revision as the planning contract.");
+  await user.click(screen.getByRole("button", { name: "Continue editing" }));
   const editor = await screen.findByRole("textbox", { name: "Editable product specification JSON" });
   fireEvent.change(editor, { target: { value: '{"title":"reviewed"}' } });
   expect(document.querySelector(".syntax-textarea-layer")).toHaveTextContent('{"title":"reviewed"}');
-  await user.click(screen.getByRole("button", { name: "Accept specification edit" }));
-  expect(screen.getByRole("dialog", { name: "Confirm product specification revision" })).toBeVisible();
-  await user.click(screen.getByRole("button", { name: "Confirm revised specification" }));
+  await user.click(screen.getByRole("button", { name: "Save refined specification" }));
 
   expect(reviseProductSpecification).toHaveBeenCalledWith(refinementRun, { revision: 1, artifactSha256: specificationDigest }, { title: "reviewed" });
+  await user.click(screen.getByRole("button", { name: "Accept" }));
+  await user.click(screen.getByRole("button", { name: "Confirm specification" }));
+  expect(acceptProductSpecification).toHaveBeenCalledWith(refinementRun);
+  expect(screen.queryByRole("dialog", { name: "Confirm specification" })).not.toBeInTheDocument();
+  expect(screen.getByRole("status")).toHaveTextContent("Planning agent is generating the immutable plan.");
 });
 
 test("keeps an invalid server-rejected revision in the editor for correction", async () => {
@@ -318,15 +379,16 @@ test("keeps an invalid server-rejected revision in the editor for correction", a
   const specificationDigest = "c".repeat(64);
   const reviseProductSpecification = jest.fn<ApiClient["reviseProductSpecification"]>().mockRejectedValue(new Error("Authoritative API request failed (422)"));
   const refinementStages: Run["stages"] = [{ stage_id: "product_specification", label: "Product specification", state: "awaiting_operator", availability: "authoritative", reason: "Review.", artifact_kind: "product_specification" }];
-  const refinementRun: Run = { ...run, status: "planning", active_gate: null, product_specification_revision: 1, artifacts: [{ kind: "product_specification", sha256: specificationDigest }], stages: refinementStages, workflow_graph: { nodes: refinementStages.map((stage) => ({ ...stage, node_type: "queue" })), edges: [] } };
+  const refinementRun: Run = { ...run, status: "planning", active_gate: null, product_specification_revision: 1, specification_evaluation_readiness: "needs_revision", artifacts: [{ kind: "product_specification", sha256: specificationDigest }], stages: refinementStages, available_actions: [{ action_id: "refine_product_specification", stage_id: "product_specification", label: "Needs refinement", description: "Edit the draft.", requires_confirmation: false }], workflow_graph: { nodes: refinementStages.map((stage) => ({ ...stage, node_type: "queue" })), edges: [] } };
   render(<App client={client({ listRuns: async () => ({ runs: [refinementRun], revision: "refinement", etag: "refinement", unchanged: false }), getRun: async () => refinementRun, getEvidence: async () => ({ content: '{"title":"draft"}', sha256: specificationDigest }), reviseProductSpecification })} />);
 
   await user.click(await screen.findByText("run-12345678"));
   await user.click(screen.getByRole("button", { name: "Focus Product specification" }));
+  expect(screen.getByRole("button", { name: "Needs refinement" })).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "Needs refinement" }));
   const editor = await screen.findByRole("textbox", { name: "Editable product specification JSON" });
   fireEvent.change(editor, { target: { value: '{"title":"reviewed"}' } });
-  await user.click(screen.getByRole("button", { name: "Accept specification edit" }));
-  await user.click(screen.getByRole("button", { name: "Confirm revised specification" }));
+  await user.click(screen.getByRole("button", { name: "Save refined specification" }));
 
   expect(screen.getByRole("textbox", { name: "Editable product specification JSON" })).toHaveValue('{"title":"reviewed"}');
   expect(screen.getByText("Authoritative API request failed (422)")).toBeVisible();
@@ -355,7 +417,7 @@ test("requires an authoritative positive revision before offering product specif
   await user.click(await screen.findByText("run-12345678"));
   await user.click(screen.getByRole("button", { name: "Focus Product specification" }));
 
-  expect(screen.getByText("The displayed product specification revision is unavailable. Refresh the run before editing or selecting it.")).toBeVisible();
+  expect(screen.getByText("The displayed product specification revision is unavailable. Refresh the run before editing or accepting it.")).toBeVisible();
   expect(screen.queryByRole("textbox", { name: "Editable product specification JSON" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Select product specification" })).not.toBeInTheDocument();
 });
@@ -371,31 +433,29 @@ test("shows selected phase facts in the consolidated workflow control center", a
   expect(phase).toHaveTextContent("authoritative");
 });
 
-test("keeps only specification references in the workflow workspace", async () => {
+test("keeps plan evidence out of the workflow specification workspace", async () => {
   const user = userEvent.setup();
   render(<App client={client()} />);
 
   await user.click(await screen.findByText("run-12345678"));
 
-  expect(screen.getByRole("button", { name: `Specification ${digest.slice(0, 12)}` })).toBeVisible();
-  expect(screen.queryByRole("button", { name: `plan ${digest.slice(0, 12)}` })).not.toBeInTheDocument();
-  expect(screen.queryByLabelText("Verified evidence")).not.toBeInTheDocument();
+  expect(await screen.findByLabelText("Specification contents")).toBeVisible();
+  expect(screen.queryByLabelText("plan contents")).not.toBeInTheDocument();
 });
 
-test("updates the displayed digest when a specification reference is selected", async () => {
+test("displays submitted and product specifications together", async () => {
   const user = userEvent.setup();
   const specificationDigest = "c".repeat(64);
   const refinedRun: Run = { ...run, artifacts: [{ kind: "source", sha256: digest }, { kind: "product_specification", sha256: specificationDigest }, { kind: "plan", sha256: digest }] };
   render(<App client={client({ listRuns: async () => ({ runs: [refinedRun], revision: "refined", etag: "refined", unchanged: false }), getRun: async () => refinedRun })} />);
 
   await user.click(await screen.findByText("run-12345678"));
-  const productSpecification = screen.getByRole("button", { name: `Product specification ${specificationDigest.slice(0, 12)}` });
-  await user.click(productSpecification);
-  expect(productSpecification).toHaveAttribute("aria-pressed", "true");
+  expect(await screen.findByLabelText("Specification contents")).toBeVisible();
+  expect(screen.getByLabelText("Product specification contents")).toBeVisible();
   expect(screen.getByText(specificationDigest)).toBeVisible();
 });
 
-test("does not render the selected specification body in the workflow workspace", async () => {
+test("renders the complete specification bodies in the workflow workspace", async () => {
   const user = userEvent.setup();
   const specificationDigest = "c".repeat(64);
   const refinedRun: Run = {
@@ -405,11 +465,8 @@ test("does not render the selected specification body in the workflow workspace"
   render(<App client={client({ listRuns: async () => ({ runs: [refinedRun], revision: "refined", etag: "refined", unchanged: false }), getRun: async () => refinedRun })} />);
 
   await user.click(await screen.findByText("run-12345678"));
-  const evidence = screen.getByRole("button", { name: `Product specification ${specificationDigest.slice(0, 12)}` });
-  await user.click(evidence);
-
-  expect(evidence).toHaveAttribute("aria-pressed", "true");
-  expect(screen.queryByLabelText("Verified evidence")).not.toBeInTheDocument();
+  expect(await screen.findByLabelText("Specification contents")).toHaveTextContent("verified");
+  expect(screen.getByLabelText("Product specification contents")).toHaveTextContent("verified");
 });
 
 test("removes reviewer-context controls from the specification workspace", async () => {
