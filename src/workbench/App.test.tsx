@@ -63,7 +63,7 @@ test("keeps the completed evaluation in focus after specification acceptance", a
     { stage_id: "specification", label: "Specification", state: "completed", availability: "authoritative", reason: "Recorded.", artifact_kind: "source" },
     { stage_id: "product_specification", label: "Product specification", state: "completed", availability: "authoritative", reason: "Accepted.", artifact_kind: "product_specification" },
     { stage_id: "specification_evaluation", label: "Specification evaluation", state: "completed", availability: "authoritative", reason: "Recorded.", artifact_kind: "specification_evaluation" },
-    { stage_id: "planning", label: "Planning", state: "awaiting_operator", availability: "authoritative", reason: "Proceed when ready.", artifact_kind: null },
+    { stage_id: "planning", label: "Planning", state: "queued", availability: "authoritative", reason: "Awaiting planner pickup.", artifact_kind: null },
   ];
   const acceptedRun: Run = {
     ...run,
@@ -372,6 +372,35 @@ test("confirms acceptance or continues editing a product specification", async (
   expect(acceptProductSpecification).toHaveBeenCalledWith(refinementRun);
   expect(screen.queryByRole("dialog", { name: "Confirm specification" })).not.toBeInTheDocument();
   expect(screen.getByRole("status")).toHaveTextContent("Planning agent is generating the immutable plan.");
+});
+
+test("opens refinement after acceptance reports recorded findings", async () => {
+  const user = userEvent.setup();
+  const specificationDigest = "c".repeat(64);
+  const refinementStages: Run["stages"] = [{ stage_id: "product_specification", label: "Product specification", state: "awaiting_operator", availability: "authoritative", reason: "Review.", artifact_kind: "product_specification" }];
+  const refinementRun: Run = { ...run, status: "planning", active_gate: null, product_specification_revision: 1, artifacts: [{ kind: "product_specification", sha256: specificationDigest }], stages: refinementStages, available_actions: [{ action_id: "accept_product_specification", stage_id: "product_specification", label: "Accept", description: "Validate and accept.", requires_confirmation: true }, { action_id: "refine_product_specification", stage_id: "product_specification", label: "Needs refinement", description: "Edit the draft.", requires_confirmation: false }], workflow_graph: { nodes: refinementStages.map((stage) => ({ ...stage, node_type: "queue" })), edges: [] } };
+  const acceptProductSpecification = jest.fn<ApiClient["acceptProductSpecification"]>().mockResolvedValue({ outcome: "needs_refinement" });
+  render(<App client={client({ listRuns: async () => ({ runs: [refinementRun], revision: "refinement", etag: "refinement", unchanged: false }), getRun: async () => refinementRun, getEvidence: async () => ({ content: '{"title":"draft"}', sha256: specificationDigest }), acceptProductSpecification })} />);
+
+  await user.click(await screen.findByText("run-12345678"));
+  await user.click(screen.getByRole("button", { name: "Focus Product specification" }));
+  await user.click(screen.getByRole("button", { name: "Accept" }));
+  await user.click(screen.getByRole("button", { name: "Confirm specification" }));
+
+  expect(await screen.findByRole("textbox", { name: "Editable product specification JSON" })).toBeVisible();
+  expect(screen.getByRole("status")).toHaveTextContent("Specification needs refinement.");
+});
+
+test("keeps cancellation available after a product specification is selected", async () => {
+  const user = userEvent.setup();
+  const specificationDigest = "c".repeat(64);
+  const selectedStages: Run["stages"] = [{ stage_id: "product_specification", label: "Product specification", state: "completed", availability: "authoritative", reason: "Selected.", artifact_kind: "product_specification" }, { stage_id: "planning", label: "Planning", state: "queued", availability: "authoritative", reason: "Awaiting planner pickup.", artifact_kind: null }];
+  const selectedRun: Run = { ...run, status: "planning", active_gate: null, product_specification_revision: 1, selected_product_specification_revision: 1, artifacts: [{ kind: "product_specification", sha256: specificationDigest }], stages: selectedStages, available_actions: [{ action_id: "cancel_planning_run", stage_id: "planning", label: "Cancel", description: "Stop the run.", requires_confirmation: true }], workflow_graph: { nodes: selectedStages.map((stage) => ({ ...stage, node_type: "queue" })), edges: [] } };
+  render(<App client={client({ listRuns: async () => ({ runs: [selectedRun], revision: "selected", etag: "selected", unchanged: false }), getRun: async () => selectedRun })} />);
+
+  await user.click(await screen.findByText("run-12345678"));
+  await user.click(screen.getByRole("button", { name: "Focus Product specification" }));
+  expect(screen.getByRole("button", { name: "Cancel" })).toBeVisible();
 });
 
 test("keeps an invalid server-rejected revision in the editor for correction", async () => {

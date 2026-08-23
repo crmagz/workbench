@@ -323,9 +323,14 @@ function ProductSpecificationControls({ client, run, onComplete, showHeading = t
     setEditing(false);
     try {
       setPending(true); setNotice("Specification evaluation accepted. Planning agent is generating the immutable plan.");
-      await client.acceptProductSpecification(run);
+      const acceptance = await client.acceptProductSpecification(run);
       const refreshed = await onComplete();
       if (refreshed === false) { setNotice("Acceptance was recorded, but the authoritative workflow could not be refreshed. Refresh before continuing."); return; }
+      if (acceptance.outcome === "needs_refinement") {
+        setEditing(true);
+        setNotice("Specification needs refinement. Resolve the recorded findings before it can be used for planning.");
+        return;
+      }
       setNotice("Specification accepted. Planning agent is generating the immutable plan.");
     } catch (reason) { setNotice(reason instanceof Error ? reason.message : "The specification could not be accepted."); }
     finally { setPending(false); }
@@ -342,6 +347,7 @@ function ProductSpecificationControls({ client, run, onComplete, showHeading = t
     {mutable && !artifact && hasAction("generate_product_specification") && <div className="form-actions"><button className="button-primary" disabled={pending} aria-busy={pending} onClick={() => void act(() => client.generateProductSpecification(run.run_id), "Draft generated. Review it before accepting or refining it.", "Planner agent is generating the product specification. This stage will move to review when immutable evidence is recorded.")}>{pending ? "Planner agent running…" : "Proceed"}</button>{hasAction("cancel_planning_run") && <button ref={cancellationTriggerRef} className="button-danger" disabled={pending} onClick={() => setConfirmingCancellation(true)}>Cancel</button>}</div>}
     {mutable && artifact && hasMutableRevision && hasAction("accept_product_specification") && <div className="form-actions"><button ref={acceptanceTriggerRef} className="button-primary" disabled={pending} onClick={() => setConfirmingAcceptance(true)}>Accept</button>{hasAction("refine_product_specification") && <button className="button-secondary" disabled={pending} onClick={() => setEditing(true)}>Needs refinement</button>}{hasAction("cancel_planning_run") && <button ref={cancellationTriggerRef} className="button-danger" disabled={pending} onClick={() => setConfirmingCancellation(true)}>Cancel</button>}</div>}
     {mutable && artifact && hasMutableRevision && !selected && !editing && hasAction("refine_product_specification") && !hasAction("accept_product_specification") && <div className="form-actions"><button className="button-secondary" disabled={pending} onClick={() => setEditing(true)}>Needs refinement</button>{hasAction("cancel_planning_run") && <button ref={cancellationTriggerRef} className="button-danger" disabled={pending} onClick={() => setConfirmingCancellation(true)}>Cancel</button>}</div>}
+    {mutable && selected && hasAction("cancel_planning_run") && <div className="form-actions"><button ref={cancellationTriggerRef} className="button-danger" disabled={pending} onClick={() => setConfirmingCancellation(true)}>Cancel</button></div>}
     {mutable && artifact && hasMutableRevision && editing && <div className="specification-editor"><label className="form-field" htmlFor="product-specification-revision"><span>Editable product specification JSON</span><div className="syntax-textarea"><pre ref={syntaxLayerRef} aria-hidden="true" className="evidence-json syntax-textarea-layer">{jsonSyntax(revisionText)}</pre><textarea ref={editorRef} id="product-specification-revision" className="form-textarea syntax-textarea-input" value={revisionText} onChange={(event) => { setRevisionText(event.target.value); setRevisionDirty(true); }} onScroll={(event) => syntaxLayerRef.current?.scrollTo({ top: event.currentTarget.scrollTop, left: event.currentTarget.scrollLeft })} aria-describedby="product-specification-revision-help" disabled={loadingRevision || pending} /></div></label><p id="product-specification-revision-help" className="form-help">Save a complete new revision for review. Saving does not accept the specification.</p><div className="form-actions"><button className="button-primary" disabled={revisionStale || loadingRevision || pending || !revisionText} onClick={() => void submitRevision()}>{loadingRevision ? "Loading specification…" : "Save refined specification"}</button>{revisionStale && <button className="button-secondary" disabled={pending} onClick={() => { setRevisionDirty(false); setRevisionStale(false); setRevisionReload((value) => value + 1); }}>Reload latest specification</button>}</div></div>}
     {selected && <p className="sync-row" role="status">Product specification revision {run.selected_product_specification_revision} is accepted for planning.</p>}
     {notice && <p className="sync-row" role="status">{notice}</p>}
@@ -422,7 +428,7 @@ function preferredWorkflowNodeId(nodes: PositionedWorkflowNode[], activeGate: Ru
   const evaluation = nodes.find((node) => node.id === "specification_evaluation");
   // Acceptance records evaluation and starts planning in one command. Keep
   // the completed evaluation visible only until the planning agent begins.
-  if (planning?.status === "awaiting_operator" && evaluation?.status === "completed") return evaluation.id;
+  if ((planning?.status === "awaiting_operator" || planning?.status === "queued") && evaluation?.status === "completed") return evaluation.id;
   return nodes.find((node) => node.id === `${activeGate}_approval`)?.id
     ?? nodes.find((node) => node.status === "in_progress")?.id
     ?? nodes.find((node) => node.status === "queued")?.id
