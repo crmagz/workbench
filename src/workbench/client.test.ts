@@ -129,6 +129,19 @@ test("submits acceptance for the displayed revision and reuses its key after an 
   expect(JSON.parse(fetchMock.mock.calls[1]![1].body as string)).toEqual({ revision: 2, artifact_sha256: "b".repeat(64) });
 });
 
+test("replays cancellation with the same key after an ambiguous transport failure", async () => {
+  const fetchMock = jest
+    .fn<(url: string, options: RequestInit) => Promise<Response>>()
+    .mockRejectedValueOnce(new Error("network interrupted"))
+    .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ status: "cancelled" }) } as Response);
+  global.fetch = fetchMock as unknown as typeof fetch;
+
+  await expect(apiClient.cancelPlanningRun(run.run_id)).rejects.toThrow("interrupted");
+  await apiClient.cancelPlanningRun(run.run_id);
+
+  expect(fetchMock.mock.calls[0]![1].headers).toEqual(fetchMock.mock.calls[1]![1].headers);
+});
+
 test("reuses the revision idempotency key when a successful response body is interrupted", async () => {
   const specificationRun: Run = { ...run, product_specification_revision: 2, artifacts: [{ kind: "product_specification", sha256: "c".repeat(64) }] };
   const parent = { revision: 1, artifactSha256: "b".repeat(64) };
