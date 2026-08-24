@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { apiClient, type Agent, type AgentInvocation, type AgentInvocationDetail, type ApiClient, type Artifact, type Project, type Run, type Stage, type TimelineEvent } from "./client";
 import { DecisionControls, McpCapabilityEvidence } from "./DecisionControls";
+import { renderSchemaYaml } from "./schemaYaml";
 
 type DetailTab = "summary" | "workflow" | "timeline" | "artifacts" | "plan" | "execution" | "review" | "approvals";
 type Theme = "system" | "dark" | "light";
@@ -197,6 +198,26 @@ function prettyEvidence(content: string) {
   catch { return content; }
 }
 
+function yamlScalarSyntax(value: string, key: string) {
+  const match = /^(\s*)(.*)$/.exec(value);
+  if (!match || !match[2]) return value;
+  const scalar = match[2];
+  const tone = /^(true|false|null|yes|no|on|off)$/i.test(scalar) ? "yaml-literal" : /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/.test(scalar) ? "yaml-number" : "yaml-string";
+  return <Fragment key={key}>{match[1]}<span className={tone}>{scalar}</span></Fragment>;
+}
+
+function yamlSyntax(content: string) {
+  return content.split("\n").flatMap((line, index) => {
+    const lineKey = `${index}:${line}`;
+    const ending = index === content.split("\n").length - 1 ? [] : ["\n"];
+    const item = /^(\s*-\s+)(.*)$/.exec(line);
+    if (item) return [item[1], yamlScalarSyntax(item[2], `${lineKey}:item`), ...ending];
+    const mapping = /^(\s*)([^:\s][^:]*)(:)(.*)$/.exec(line);
+    if (mapping) return [mapping[1], <span className="yaml-key" key={`${lineKey}:key`}>{mapping[2]}</span>, mapping[3], yamlScalarSyntax(mapping[4], `${lineKey}:value`), ...ending];
+    return [line, ...ending];
+  });
+}
+
 function trapDialogFocus(event: React.KeyboardEvent<HTMLElement>, close: () => void) {
   if (event.key === "Escape") { event.preventDefault(); close(); return; }
   if (event.key !== "Tab") return;
@@ -231,7 +252,18 @@ function SpecificationEvidencePanes({ client, run, artifacts, initial }: { clien
     return () => { active = false; };
   }, [artifacts.map((artifact) => artifact.sha256).join(":"), client, initial, run.run_id]);
   if (artifacts.length === 0) return <p className="control-note">No specification references are available for this run.</p>;
-  return <div className="specification-evidence-panes" aria-label="Full workflow specifications">{artifacts.map((artifact) => <section key={`${artifact.kind}:${artifact.sha256}`} className="specification-evidence-pane"><header><div><p className="eyebrow">{artifact.kind === "source" ? "Submitted specification" : "Product specification"}</p><h4>{artifactLabel(artifact.kind)}</h4></div><small className="mono">{artifact.sha256}</small></header>{content[artifact.sha256] ? <pre className="evidence-json" aria-label={`${artifactLabel(artifact.kind)} contents`}>{prettyEvidence(content[artifact.sha256])}</pre> : <p className="control-note" role="status">Loading full specification…</p>}</section>)}{error && <p className="evidence-error" role="alert">{error}</p>}</div>;
+  return <div className="specification-evidence-panes" aria-label="Full workflow specifications">{artifacts.map((artifact) => <SpecificationEvidencePane key={`${artifact.kind}:${artifact.sha256}`} artifact={artifact} content={content[artifact.sha256]} revision={run.product_specification_revision} />)}{error && <p className="evidence-error" role="alert">{error}</p>}</div>;
+}
+
+function SpecificationEvidencePane({ artifact, content, revision }: { artifact: Artifact; content?: string; revision?: number | null }) {
+  const [format, setFormat] = useState<"yaml" | "json">("yaml");
+  const label = artifactLabel(artifact.kind);
+  const schemaYaml = content ? renderSchemaYaml(content, artifact, revision) : null;
+  const canShowYaml = schemaYaml !== null;
+  const activeFormat = format === "yaml" && canShowYaml ? "yaml" : "json";
+  const artifactId = `specification-${artifact.kind}-${artifact.sha256}`;
+  const panelId = `${artifactId}-${activeFormat}`;
+  return <section className="specification-evidence-pane"><header><div><p className="eyebrow">{artifact.kind === "source" ? "Submitted specification" : "Product specification"}</p><h4>{label}</h4></div><small className="mono">{artifact.sha256}</small></header>{content ? <><div className="specification-format-tabs" role="tablist" aria-label={`${label} format`}><button id={`${artifactId}-yaml`} type="button" role="tab" aria-selected={activeFormat === "yaml"} aria-controls={panelId} disabled={!canShowYaml} onClick={() => setFormat("yaml")}>Schema YAML</button><button id={`${artifactId}-json`} type="button" role="tab" aria-selected={activeFormat === "json"} aria-controls={panelId} onClick={() => setFormat("json")}>Canonical JSON</button></div><div id={panelId} role="tabpanel" aria-labelledby={`${artifactId}-${activeFormat}`}><pre className="evidence-json" aria-label={`${label} ${activeFormat === "yaml" ? "YAML composition" : "canonical JSON"}`}>{activeFormat === "yaml" ? yamlSyntax(schemaYaml ?? content) : prettyEvidence(content)}</pre></div>{!canShowYaml && <p className="control-note">This artifact is not valid JSON, so its canonical evidence is shown.</p>}</> : <p className="control-note" role="status">Loading full specification…</p>}</section>;
 }
 
 function ImmutableEvidenceViewer({ client, run, initial, heading }: { client: ApiClient; run: Run; initial?: Artifact["kind"]; heading: string }) {

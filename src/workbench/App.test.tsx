@@ -238,7 +238,7 @@ test("displays the complete digest in the workflow specification workspace", asy
 
   await user.click(await screen.findByText("run-12345678"));
 
-  expect(await screen.findByText(digest)).toBeVisible();
+  expect((await screen.findAllByText(digest)).length).toBeGreaterThan(0);
 });
 
 test("preserves verified plan evidence in the legacy plan route", async () => {
@@ -353,8 +353,8 @@ test("confirms acceptance or continues editing a product specification", async (
 
   await user.click(await screen.findByText("run-12345678"));
   await user.click(screen.getByRole("button", { name: "Focus Product specification" }));
-  expect(await screen.findByLabelText("Specification contents")).toHaveTextContent('"title": "draft"');
-  expect(screen.getByLabelText("Product specification contents")).toHaveTextContent('"title": "draft"');
+  expect(await screen.findByLabelText("Specification YAML composition")).toHaveTextContent('title: draft');
+  expect(screen.getByLabelText("Product specification YAML composition")).toHaveTextContent('title: draft');
   expect(screen.queryByRole("button", { name: "Evaluate product specification" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Select product specification" })).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Cancel" })).toBeVisible();
@@ -468,7 +468,7 @@ test("keeps plan evidence out of the workflow specification workspace", async ()
 
   await user.click(await screen.findByText("run-12345678"));
 
-  expect(await screen.findByLabelText("Specification contents")).toBeVisible();
+  expect(await screen.findByLabelText("Specification YAML composition")).toBeVisible();
   expect(screen.queryByLabelText("plan contents")).not.toBeInTheDocument();
 });
 
@@ -479,9 +479,9 @@ test("displays submitted and product specifications together", async () => {
   render(<App client={client({ listRuns: async () => ({ runs: [refinedRun], revision: "refined", etag: "refined", unchanged: false }), getRun: async () => refinedRun })} />);
 
   await user.click(await screen.findByText("run-12345678"));
-  expect(await screen.findByLabelText("Specification contents")).toBeVisible();
-  expect(screen.getByLabelText("Product specification contents")).toBeVisible();
-  expect(screen.getByText(specificationDigest)).toBeVisible();
+  expect(await screen.findByLabelText("Specification YAML composition")).toBeVisible();
+  expect(screen.getByLabelText("Product specification YAML composition")).toBeVisible();
+  expect(screen.getAllByText(specificationDigest).length).toBeGreaterThan(0);
 });
 
 test("renders the complete specification bodies in the workflow workspace", async () => {
@@ -494,8 +494,22 @@ test("renders the complete specification bodies in the workflow workspace", asyn
   render(<App client={client({ listRuns: async () => ({ runs: [refinedRun], revision: "refined", etag: "refined", unchanged: false }), getRun: async () => refinedRun })} />);
 
   await user.click(await screen.findByText("run-12345678"));
-  expect(await screen.findByLabelText("Specification contents")).toHaveTextContent("verified");
-  expect(screen.getByLabelText("Product specification contents")).toHaveTextContent("verified");
+  expect(await screen.findByLabelText("Specification YAML composition")).toHaveTextContent("verified");
+  expect(screen.getByLabelText("Product specification YAML composition")).toHaveTextContent("verified");
+});
+
+test("renders schema YAML by default and preserves canonical JSON inspection", async () => {
+  const user = userEvent.setup();
+  render(<App client={client()} />);
+
+  await user.click(await screen.findByText("run-12345678"));
+  expect(await screen.findByLabelText("Specification YAML composition")).toHaveTextContent("apiVersion: cogito.dev/v1");
+  expect(screen.getByLabelText("Specification YAML composition")).toHaveTextContent("kind: SubmittedSpecification");
+  expect(screen.getByLabelText("Specification YAML composition").querySelector(".yaml-key")).toHaveTextContent("apiVersion");
+  expect(screen.getByLabelText("Specification YAML composition").querySelector(".yaml-string")).toHaveTextContent("cogito.dev/v1");
+
+  await user.click(screen.getAllByRole("tab", { name: "Canonical JSON" })[0]);
+  expect(screen.getByLabelText("Specification canonical JSON")).toHaveTextContent('"title": "verified"');
 });
 
 test("removes reviewer-context controls from the specification workspace", async () => {
