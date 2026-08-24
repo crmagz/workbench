@@ -207,9 +207,10 @@ function yamlScalarSyntax(value: string, key: string) {
 }
 
 function yamlSyntax(content: string) {
-  return content.split("\n").flatMap((line, index) => {
+  const lines = content.split("\n");
+  return lines.flatMap((line, index) => {
     const lineKey = `${index}:${line}`;
-    const ending = index === content.split("\n").length - 1 ? [] : ["\n"];
+    const ending = index === lines.length - 1 ? [] : ["\n"];
     const item = /^(\s*-\s+)(.*)$/.exec(line);
     if (item) return [item[1], yamlScalarSyntax(item[2], `${lineKey}:item`), ...ending];
     const mapping = /^(\s*)([^:\s][^:]*)(:)(.*)$/.exec(line);
