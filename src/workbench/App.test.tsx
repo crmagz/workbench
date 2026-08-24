@@ -353,8 +353,8 @@ test("confirms acceptance or continues editing a product specification", async (
 
   await user.click(await screen.findByText("run-12345678"));
   await user.click(screen.getByRole("button", { name: "Focus Product specification" }));
-  expect(await screen.findByLabelText("Specification YAML composition")).toHaveTextContent('title: draft');
-  expect(screen.getByLabelText("Product specification YAML composition")).toHaveTextContent('title: draft');
+  expect(await screen.findByLabelText("Specification YAML composition")).toHaveTextContent('title: "draft"');
+  expect(screen.getByLabelText("Product specification YAML composition")).toHaveTextContent('title: "draft"');
   expect(screen.queryByRole("button", { name: "Evaluate product specification" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Select product specification" })).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Cancel" })).toBeVisible();
@@ -503,12 +503,12 @@ test("renders schema YAML by default and preserves canonical JSON inspection", a
   render(<App client={client()} />);
 
   await user.click(await screen.findByText("run-12345678"));
-  expect(await screen.findByLabelText("Specification YAML composition")).toHaveTextContent("apiVersion: cogito.dev/v1");
-  expect(screen.getByLabelText("Specification YAML composition")).toHaveTextContent("kind: SubmittedSpecification");
+  expect(await screen.findByLabelText("Specification YAML composition")).toHaveTextContent('apiVersion: "cogito.dev/v1"');
+  expect(screen.getByLabelText("Specification YAML composition")).toHaveTextContent('kind: "SubmittedSpecification"');
   expect(screen.getByLabelText("Specification YAML composition").querySelector(".yaml-key")).toHaveTextContent("apiVersion");
   expect(screen.getByLabelText("Specification YAML composition").querySelector(".yaml-string")).toHaveTextContent("cogito.dev/v1");
 
-  await user.click(screen.getAllByRole("tab", { name: "Canonical JSON" })[0]);
+  await user.click(screen.getAllByRole("button", { name: "Canonical JSON" })[0]);
   expect(screen.getByLabelText("Specification canonical JSON")).toHaveTextContent('"title": "verified"');
 });
 
