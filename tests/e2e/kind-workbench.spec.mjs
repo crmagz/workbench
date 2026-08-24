@@ -79,7 +79,10 @@ test("renders a real Kind-backed scoped Workbench run", async ({ page }) => {
     await expect(page.getByRole("button", { name: "Focus Specification", exact: true })).toHaveAttribute("aria-pressed", "true");
     await expect(page.getByLabel("Selected workflow phase")).toContainText("Specification");
     await expect(page.getByRole("heading", { name: "Workflow specification workspace" })).toBeVisible();
-    await expect(page.getByLabel("Specification contents", { exact: true })).toBeVisible();
+    await expect(page.getByLabel("Specification YAML composition", { exact: true })).toBeVisible();
+    await expect(page.getByLabel("Specification YAML composition", { exact: true })).toContainText("apiVersion: cogito.dev/v1");
+    await page.getByLabel("Specification format").getByRole("tab", { name: "Canonical JSON", exact: true }).click();
+    await expect(page.getByLabel("Specification canonical JSON", { exact: true })).toBeVisible();
   } finally {
     await close(server);
   }
@@ -96,8 +99,8 @@ test("accepts a product specification and focuses its completed evaluation", asy
     await page.getByRole("button", { name: "Focus Specification", exact: true }).click();
     await expect(page.getByRole("button", { name: "Focus Specification", exact: true })).toHaveAttribute("aria-pressed", "true");
     await expect(page.getByLabel("Full workflow specifications")).toBeVisible();
-    await expect(page.getByLabel("Specification contents", { exact: true })).toBeVisible();
-    await expect(page.getByLabel("Product specification contents")).toBeVisible();
+    await expect(page.getByLabel("Specification YAML composition", { exact: true })).toBeVisible();
+    await expect(page.getByLabel("Product specification YAML composition", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Accept" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Needs refinement" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Cancel" })).toBeVisible();
