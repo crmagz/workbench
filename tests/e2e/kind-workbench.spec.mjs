@@ -80,8 +80,8 @@ test("renders a real Kind-backed scoped Workbench run", async ({ page }) => {
     await expect(page.getByLabel("Selected workflow phase")).toContainText("Specification");
     await expect(page.getByRole("heading", { name: "Workflow specification workspace" })).toBeVisible();
     await expect(page.getByLabel("Specification YAML composition", { exact: true })).toBeVisible();
-    await expect(page.getByLabel("Specification YAML composition", { exact: true })).toContainText("apiVersion: cogito.dev/v1");
-    await page.getByLabel("Specification format").getByRole("tab", { name: "Canonical JSON", exact: true }).click();
+    await expect(page.getByLabel("Specification YAML composition", { exact: true })).toContainText('apiVersion: "cogito.dev/v1"');
+    await page.getByLabel("Specification format").getByRole("button", { name: "Canonical JSON", exact: true }).click();
     await expect(page.getByLabel("Specification canonical JSON", { exact: true })).toBeVisible();
   } finally {
     await close(server);
