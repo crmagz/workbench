@@ -12,9 +12,11 @@ function yamlKey(key: string) {
 
 function yamlScalar(value: null | boolean | number | string) {
   if (value === null) return "null";
-  if (typeof value !== "string") return String(value);
-  const safePlainString = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(value) && !["true", "false", "null", "yes", "no", "on", "off"].includes(value.toLowerCase());
-  return safePlainString ? value : JSON.stringify(value);
+  // JSON strings can look like YAML timestamps, numbers, or YAML 1.1
+  // booleans. Quote every string so this read-only projection round-trips
+  // without changing the authoritative JSON contract's value types.
+  if (typeof value === "string") return JSON.stringify(value);
+  return String(value);
 }
 
 function yamlLines(value: JsonValue, depth = 0): string[] {
