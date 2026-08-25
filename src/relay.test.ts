@@ -27,6 +27,7 @@ test("forwards only allowlisted Workbench requests with the server-side credenti
 
   const allowed = await fetch(`${origin}/api/cogito/api/v1/workbench/runs`);
   const timeline = await fetch(`${origin}/api/cogito/api/v1/workbench/runs/run-123/timeline`);
+  const auditLogs = await fetch(`${origin}/api/cogito/api/v1/workbench/runs/run-123/timeline/event-456/logs?cursor=opaque-cursor`);
   const feedback = await fetch(`${origin}/api/cogito/api/v1/workbench/runs/run-123/feedback`);
   const revise = await fetch(`${origin}/api/cogito/api/v1/planning-runs/run-123/revise-product-specification`, {
     method: "POST",
@@ -47,11 +48,12 @@ test("forwards only allowlisted Workbench requests with the server-side credenti
   expect(denied.status).toBe(404);
   expect(crossOrigin.status).toBe(404);
   expect(timeline.status).toBe(200);
+  expect(auditLogs.status).toBe(200);
   expect(feedback.status).toBe(200);
   expect(productSpecification.status).toBe(200);
   expect(revise.status).toBe(200);
   expect(accept.status).toBe(200);
-  expect(upstream).toHaveBeenCalledTimes(6);
+  expect(upstream).toHaveBeenCalledTimes(7);
   expect(upstream).toHaveBeenCalledWith(
     new URL("https://api.example.test/api/v1/planning-runs/run-123/accept-product-specification"),
     expect.objectContaining({ headers: expect.objectContaining({ "idempotency-key": "accept-1" }) })
@@ -66,6 +68,10 @@ test("forwards only allowlisted Workbench requests with the server-side credenti
   );
   expect(upstream).toHaveBeenCalledWith(
     new URL("https://api.example.test/api/v1/workbench/runs/run-123/timeline"),
+    expect.objectContaining({ headers: expect.objectContaining({ authorization: "Bearer server-only-token" }) })
+  );
+  expect(upstream).toHaveBeenCalledWith(
+    new URL("https://api.example.test/api/v1/workbench/runs/run-123/timeline/event-456/logs?cursor=opaque-cursor"),
     expect.objectContaining({ headers: expect.objectContaining({ authorization: "Bearer server-only-token" }) })
   );
   expect(upstream).toHaveBeenCalledWith(
@@ -183,6 +189,7 @@ test("production server serves health locally and forwards only allowlisted sess
 
   const health = await fetch(`${origin}/healthz`);
   const timeline = await fetch(`${origin}/api/cogito/api/v1/workbench/runs/run-123/timeline`, { headers: { cookie: "session=verified" } });
+  const auditLogs = await fetch(`${origin}/api/cogito/api/v1/workbench/runs/run-123/timeline/event-456/logs`, { headers: { cookie: "session=verified" } });
   const feedback = await fetch(`${origin}/api/cogito/api/v1/workbench/runs/run-123/feedback`, { headers: { cookie: "session=verified" } });
   const denied = await fetch(`${origin}/api/cogito/api/v1/workbench/runs/run-123/internal`);
   await new Promise<void>((resolve, reject) => server.close((error?: Error) => error ? reject(error) : resolve()));
@@ -190,9 +197,11 @@ test("production server serves health locally and forwards only allowlisted sess
   expect(health.status).toBe(200);
   expect(timeline.status).toBe(200);
   expect(timeline.headers.get("etag")).toBe("timeline-revision");
+  expect(auditLogs.status).toBe(200);
   expect(feedback.status).toBe(200);
   expect(denied.status).toBe(404);
   expect(upstream).toHaveBeenCalledWith(new URL("https://session.example.test/api/v1/workbench/runs/run-123/timeline"), expect.anything());
+  expect(upstream).toHaveBeenCalledWith(new URL("https://session.example.test/api/v1/workbench/runs/run-123/timeline/event-456/logs"), expect.anything());
   expect(upstream).toHaveBeenCalledWith(new URL("https://session.example.test/api/v1/workbench/runs/run-123/feedback"), expect.anything());
 });
 

@@ -12,14 +12,128 @@ const run: Run = {
   artifacts: [{ kind: "source", sha256: digest }, { kind: "plan", sha256: digest }], stages, workflow_graph: { nodes: stages.map((stage) => ({ ...stage, node_type: stage.stage_id.includes("approval") ? "gate" : stage.stage_id === "specification" ? "queue" : "agent" })), edges: [{ source_node_id: "specification", target_node_id: "planning", style: "solid", emphasis: "primary" }, { source_node_id: "planning", target_node_id: "plan_approval", style: "solid", emphasis: "primary" }, { source_node_id: "plan_approval", target_node_id: "implementation", style: "solid", emphasis: "primary" }, { source_node_id: "implementation", target_node_id: "implementation_approval", style: "solid", emphasis: "primary" }] }, abilities: ["view", "approve"], workflow: ["planning", "plan", "plan_approval"],
   budget: { max_cost_usd: 3, max_wall_clock_minutes: 45, max_review_rounds: 2, actual_cost_usd: null, turns_used: null }, approval_history_available: true, approval_history: [], execution: null, external_links: []
 };
-const events: TimelineEvent[] = [{ event_id: "event-1", event_type: "plan.awaiting_approval", occurred_at: "2026-07-26T00:00:00Z", stage_id: "plan_approval", stage_ids: ["planning", "plan_approval"], gate: "plan", artifact_sha256: digest, decision: null, lifecycle_status: null, delivered: true, delivery_attempt_count: 1 }];
+const events: TimelineEvent[] = [{ event_id: "event-1", event_type: "plan.awaiting_approval", activity_kind: "agent", actor_label: "Developer", log_evidence_available: true, occurred_at: "2026-07-26T00:00:00Z", stage_id: "plan_approval", stage_ids: ["planning", "plan_approval"], gate: "plan", artifact_sha256: digest, decision: null, lifecycle_status: null, delivered: true, delivery_attempt_count: 1 }];
 const mcpGrant = { role: "developer", server_id: "github_readonly_mcp", server_version: "1.0.0", server_manifest_sha256: "b".repeat(64), tool_name: "catalog_read", input_schema_sha256: "c".repeat(64), repository_scope: "acme/api-gateway" };
 
 function client(overrides: Partial<ApiClient> = {}): ApiClient {
-  return { listProjects: async () => [{ project_id: "default" }], getHealth: async () => true, listRuns: async () => ({ runs: [run], revision: "runs", etag: "runs", unchanged: false }), getRun: async () => run, getTimeline: async () => ({ events, revision: "timeline", etag: "timeline", unchanged: false }), getEvidence: async () => ({ content: '{"title":"verified"}', sha256: digest }), getFeedback: async () => [], recordFeedback: async () => ({ feedback_id: "feedback-1", run_id: run.run_id, intent: "note", artifact_sha256: digest, stage_id: "planning", actor_id: "operator", comment: "Recorded note", created_at: "2026-08-02T00:00:00Z" }), decide: async () => undefined, generateProductSpecification: async () => undefined, acceptProductSpecification: async () => ({ outcome: "accepted" }), cancelPlanningRun: async () => undefined, evaluateProductSpecification: async () => undefined, waiveSpecificationEvaluation: async () => undefined, generatePlan: async () => undefined, selectProductSpecification: async () => undefined, reviseProductSpecification: async () => undefined, listAgents: async () => ({ agents: [], revision: "agents", etag: "agents", unchanged: false }), getAgent: async () => { throw new Error("agent unavailable"); }, listAgentInvocations: async () => ({ invocations: [], revision: "invocations", etag: "agents", unchanged: false }), getAgentInvocation: async () => { throw new Error("agent unavailable"); }, ...overrides };
+  return { listProjects: async () => [{ project_id: "default" }], getHealth: async () => true, listRuns: async () => ({ runs: [run], revision: "runs", etag: "runs", unchanged: false }), getRun: async () => run, getTimeline: async () => ({ events, revision: "timeline", etag: "timeline", unchanged: false }), getAuditLogs: async () => ({ availability: "not_available", lines: [], next_cursor: null }), getEvidence: async () => ({ content: '{"title":"verified"}', sha256: digest }), getFeedback: async () => [], recordFeedback: async () => ({ feedback_id: "feedback-1", run_id: run.run_id, intent: "note", artifact_sha256: digest, stage_id: "planning", actor_id: "operator", comment: "Recorded note", created_at: "2026-08-02T00:00:00Z" }), decide: async () => undefined, generateProductSpecification: async () => undefined, acceptProductSpecification: async () => ({ outcome: "accepted" }), cancelPlanningRun: async () => undefined, evaluateProductSpecification: async () => undefined, waiveSpecificationEvaluation: async () => undefined, generatePlan: async () => undefined, selectProductSpecification: async () => undefined, reviseProductSpecification: async () => undefined, listAgents: async () => ({ agents: [], revision: "agents", etag: "agents", unchanged: false }), getAgent: async () => { throw new Error("agent unavailable"); }, listAgentInvocations: async () => ({ invocations: [], revision: "invocations", etag: "agents", unchanged: false }), getAgentInvocation: async () => { throw new Error("agent unavailable"); }, ...overrides };
 }
 
 beforeEach(() => { window.history.replaceState({}, "", "/"); window.localStorage.clear(); });
+
+test("expands authoritative audit activity with redacted correlated output", async () => {
+  const user = userEvent.setup();
+  const getAuditLogs = jest.fn<ApiClient["getAuditLogs"]>().mockResolvedValue({
+    availability: "available", next_cursor: null,
+    lines: [{ timestamp: "2026-08-23T00:00:00Z", stream: "stderr", message: "event-1 agent output" }]
+  });
+  window.history.replaceState({}, "", `/runs/${run.run_id}/timeline`);
+  render(<App client={client({ getAuditLogs })} />);
+
+  await user.click(await screen.findByRole("button", { name: "View logs →" }));
+  expect(await screen.findByLabelText("Redacted correlated log output")).toHaveTextContent("event-1 agent output");
+  expect(getAuditLogs).toHaveBeenCalledWith(run.run_id, events[0].event_id, undefined);
+  expect(screen.getByRole("button", { name: "Hide logs" })).toHaveAttribute("aria-expanded", "true");
+});
+
+test("renders a legacy timeline envelope as a non-expandable lifecycle event", async () => {
+  const legacyEvent: TimelineEvent = {
+    event_id: "event-legacy", event_type: "plan.awaiting_approval", occurred_at: "2026-07-26T00:00:00Z",
+    stage_id: "plan_approval", stage_ids: ["planning", "plan_approval"], gate: "plan", artifact_sha256: digest,
+    decision: null, lifecycle_status: null, delivered: true, delivery_attempt_count: 1
+  };
+  window.history.replaceState({}, "", `/runs/${run.run_id}/timeline`);
+  render(<App client={client({ getTimeline: async () => ({ events: [legacyEvent], revision: "legacy", etag: "legacy", unchanged: false }) })} />);
+
+  expect(await screen.findByText("EVENT")).toBeVisible();
+  expect(screen.getByText("Event recorded")).toBeVisible();
+  expect(screen.queryByRole("button", { name: "View logs →" })).not.toBeInTheDocument();
+});
+
+test("deduplicates an inclusive pagination boundary in correlated output", async () => {
+  const user = userEvent.setup();
+  const firstLine = { timestamp: "2026-08-23T00:00:02Z", stream: "stderr", message: "newer output" };
+  const olderLine = { timestamp: "2026-08-23T00:00:01Z", stream: "stderr", message: "older output" };
+  const getAuditLogs = jest.fn<ApiClient["getAuditLogs"]>()
+    .mockResolvedValueOnce({ availability: "available", lines: [firstLine], next_cursor: "cursor-1" })
+    .mockResolvedValueOnce({ availability: "available", lines: [firstLine, olderLine], next_cursor: null });
+  window.history.replaceState({}, "", `/runs/${run.run_id}/timeline`);
+  render(<App client={client({ getAuditLogs })} />);
+
+  await user.click(await screen.findByRole("button", { name: "View logs →" }));
+  await user.click(await screen.findByRole("button", { name: "Load earlier output" }));
+
+  const output = await screen.findByLabelText("Redacted correlated log output");
+  expect(output).toHaveTextContent("newer output");
+  expect(output).toHaveTextContent("older output");
+  expect(screen.getAllByText("newer output", { exact: true })).toHaveLength(1);
+  expect(getAuditLogs).toHaveBeenLastCalledWith(run.run_id, events[0].event_id, "cursor-1");
+});
+
+test("retries a failed continuation without discarding earlier correlated output", async () => {
+  const user = userEvent.setup();
+  const firstLine = { timestamp: "2026-08-23T00:00:02Z", stream: "stderr", message: "newer output" };
+  const olderLine = { timestamp: "2026-08-23T00:00:01Z", stream: "stderr", message: "older output" };
+  const getAuditLogs = jest.fn<ApiClient["getAuditLogs"]>()
+    .mockResolvedValueOnce({ availability: "available", lines: [firstLine], next_cursor: "cursor-1" })
+    .mockRejectedValueOnce(new Error("temporary Loki failure"))
+    .mockResolvedValueOnce({ availability: "available", lines: [olderLine], next_cursor: null });
+  window.history.replaceState({}, "", `/runs/${run.run_id}/timeline`);
+  render(<App client={client({ getAuditLogs })} />);
+
+  await user.click(await screen.findByRole("button", { name: "View logs →" }));
+  await user.click(await screen.findByRole("button", { name: "Load earlier output" }));
+  await user.click(await screen.findByRole("button", { name: "Retry" }));
+
+  const output = await screen.findByLabelText("Redacted correlated log output");
+  expect(output).toHaveTextContent("newer output");
+  expect(output).toHaveTextContent("older output");
+  expect(getAuditLogs).toHaveBeenNthCalledWith(1, run.run_id, events[0].event_id, undefined);
+  expect(getAuditLogs).toHaveBeenNthCalledWith(2, run.run_id, events[0].event_id, "cursor-1");
+  expect(getAuditLogs).toHaveBeenNthCalledWith(3, run.run_id, events[0].event_id, "cursor-1");
+});
+
+test("expands a phase's Audit activity with its correlated output", async () => {
+  const user = userEvent.setup();
+  const getAuditLogs = jest.fn<ApiClient["getAuditLogs"]>().mockResolvedValue({
+    availability: "available", next_cursor: null,
+    lines: [{ timestamp: "2026-08-23T00:00:00Z", stream: "cogito-executions/execution-pod/execution", message: "event-1 phase output" }]
+  });
+  window.history.replaceState({}, "", `/workflows/${run.run_id}/nodes/planning/audit`);
+  render(<App client={client({ getAuditLogs })} />);
+
+  await user.click(await screen.findByRole("button", { name: "View logs →" }));
+  expect(await screen.findByLabelText("Redacted correlated log output")).toHaveTextContent("phase output");
+  expect(getAuditLogs).toHaveBeenCalledWith(run.run_id, events[0].event_id, undefined);
+});
+
+test("expands Workflow Canvas audit activity with correlated output", async () => {
+  const user = userEvent.setup();
+  const getAuditLogs = jest.fn<ApiClient["getAuditLogs"]>().mockResolvedValue({
+    availability: "available", next_cursor: null,
+    lines: [{ timestamp: "2026-08-23T00:00:00Z", stream: "cogito-executions/execution-pod/execution", message: "workflow audit output" }]
+  });
+  render(<App client={client({ getAuditLogs })} />);
+
+  await user.click(await screen.findByText(run.run_id));
+  await user.click(await screen.findByRole("button", { name: "View logs →" }));
+
+  expect(await screen.findByLabelText("Redacted correlated log output")).toHaveTextContent("workflow audit output");
+  expect(getAuditLogs).toHaveBeenCalledWith(run.run_id, events[0].event_id, undefined);
+});
+
+test("renders lifecycle events without an expandable log control", async () => {
+  const lifecycleEvents: TimelineEvent[] = [{
+    ...events[0], event_id: "event-lifecycle", event_type: "plan_approval_recorded", activity_kind: "event",
+    actor_label: null, log_evidence_available: false,
+  }];
+  window.history.replaceState({}, "", `/runs/${run.run_id}/timeline`);
+  render(<App client={client({ getTimeline: async () => ({ events: lifecycleEvents, revision: "timeline", etag: "timeline", unchanged: false }) })} />);
+
+  expect(await screen.findByText("EVENT")).toBeVisible();
+  expect(screen.getByText("Event recorded")).toBeVisible();
+  expect(screen.queryByRole("button", { name: "View logs →" })).not.toBeInTheDocument();
+});
 
 test("migrates the legacy stored theme preference", async () => {
   window.localStorage.setItem("cogito-workbench-theme", "dark");

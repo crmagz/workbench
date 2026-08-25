@@ -21,6 +21,8 @@ const agentRegistrationVersion = process.env.COGITO_E2E_AGENT_REGISTRATION_VERSI
 const agentRunId = process.env.COGITO_E2E_AGENT_RUN_ID;
 const agentRole = process.env.COGITO_E2E_AGENT_ROLE;
 const agentWorkflowRunId = process.env.COGITO_E2E_AGENT_WORKFLOW_RUN_ID;
+const auditRunId = process.env.COGITO_E2E_AUDIT_RUN_ID;
+const auditEventId = process.env.COGITO_E2E_AUDIT_EVENT_ID;
 
 if (decision && !["request_revision", "approve_no_mcp"].includes(decision)) {
   throw new Error("COGITO_KIND_E2E_DECISION must be request_revision or approve_no_mcp");
@@ -83,6 +85,24 @@ test("renders a real Kind-backed scoped Workbench run", async ({ page }) => {
     await expect(page.getByLabel("Specification YAML composition", { exact: true })).toContainText('apiVersion: "cogito.dev/v1"');
     await page.getByLabel("Specification format").getByRole("button", { name: "Canonical JSON", exact: true }).click();
     await expect(page.getByLabel("Specification canonical JSON", { exact: true })).toBeVisible();
+  } finally {
+    await close(server);
+  }
+});
+
+test("renders bounded redacted stage output in Kind-backed audit activity", async ({ page }) => {
+  test.skip(!auditRunId || !auditEventId, "set COGITO_E2E_AUDIT_RUN_ID and COGITO_E2E_AUDIT_EVENT_ID for a completed stage invocation");
+  if (!upstreamUrl || !token) {
+    throw new Error("COGITO_E2E_UPSTREAM_URL and COGITO_E2E_UPSTREAM_TOKEN are required");
+  }
+  const { server, origin } = await startWorkbenchRelay();
+  try {
+    await page.goto(`${origin}/runs/${encodeURIComponent(auditRunId)}/timeline`);
+    await expect(page.getByRole("heading", { name: "Authoritative timeline" })).toBeVisible();
+    const logResponse = page.waitForResponse((response) => response.url().includes(`/workbench/runs/${encodeURIComponent(auditRunId)}/timeline/${encodeURIComponent(auditEventId)}/logs`));
+    await page.getByRole("button", { name: "View logs →" }).click();
+    expect((await logResponse).status()).toBe(200);
+    await expect(page.getByLabel("Redacted correlated log output")).toContainText(auditEventId);
   } finally {
     await close(server);
   }
