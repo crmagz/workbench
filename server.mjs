@@ -11,7 +11,7 @@ const allowed = [
   { method: "GET", path: /^\/api\/v1\/workbench\/agents(?:\/[^/]+\/[^/]+(?:\/invocations)?)?$/ },
   { method: "GET", path: /^\/api\/v1\/workbench\/agent-invocations\/[^/]+\/[^/]+$/ },
   { method: "POST", path: /^\/api\/v1\/planning-runs\/[^/]+\/(?:generate-product-specification|accept-product-specification|evaluate-product-specification|waive-specification-evaluation|select-product-specification|revise-product-specification|generate-plan|cancel)$/ },
-  { method: "GET", path: /^\/api\/v1\/workbench\/runs(?:\/[^/]+(?:\/(?:timeline|evidence\/(?:source|product_specification|specification_evaluation|plan|implementation)))?)?$/ },
+  { method: "GET", path: /^\/api\/v1\/workbench\/runs(?:\/[^/]+(?:\/(?:timeline(?:\/[^/]+\/logs)?|evidence\/(?:source|product_specification|specification_evaluation|plan|implementation)))?)?$/ },
   { method: "GET", path: /^\/api\/v1\/workbench\/runs\/[^/]+\/feedback$/ },
   { method: "POST", path: /^\/api\/v1\/workbench\/runs\/[^/]+\/feedback$/ },
   { method: "POST", path: /^\/api\/v1\/coordination\/runs\/[^/]+\/actions\/(?:plan|implementation)$/ }

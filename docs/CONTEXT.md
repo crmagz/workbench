@@ -51,6 +51,12 @@ the immutable evidence, decision record, and execution/outbox state. For the
 full backend lifecycle contract, see Cogito's
 [specification evaluation lifecycle guide](https://github.com/crmagz/cogito/blob/main/docs/specification-evaluation-lifecycle.md).
 
+Lifecycle events remain concise records with no expandable output. Agent and
+MCP entries may expose bounded, redacted correlated workload output from the
+observability store. The Workbench treats missing activity metadata as a
+legacy lifecycle event during a rolling API upgrade, and paginated output is
+shown without repeating Loki's inclusive cursor boundary.
+
 ## Delivery state
 
 The centralized single-form workflow workspace is proposed in

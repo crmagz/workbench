@@ -23,6 +23,12 @@ export type McpCapabilities = {
 export type TimelineEvent = {
   event_id: string;
   event_type: string;
+  // Optional while Workbench and the authoritative API are rolling out the
+  // audit-output envelope independently. Consumers render an omitted value as
+  // an ordinary lifecycle event with no expandable output.
+  activity_kind?: "event" | "agent" | "mcp";
+  actor_label?: string | null;
+  log_evidence_available?: boolean;
   occurred_at: string;
   stage_id: string | null;
   stage_ids: string[];
@@ -32,6 +38,12 @@ export type TimelineEvent = {
   lifecycle_status: string | null;
   delivered: boolean;
   delivery_attempt_count: number;
+};
+export type AuditLogLine = { timestamp: string; stream: string; message: string };
+export type AuditLogResponse = {
+  availability: "available" | "disabled" | "unavailable" | "not_available";
+  lines: AuditLogLine[];
+  next_cursor: string | null;
 };
 export type Feedback = { feedback_id: string; run_id: string; intent: "note"; artifact_sha256: string; stage_id: string; actor_id: string; comment: string; created_at: string };
 export type Stage = {
@@ -122,6 +134,7 @@ export type ApiClient = {
   listRuns: (options?: { projectId?: string; etag?: string; signal?: AbortSignal }) => Promise<{ runs: Run[]; revision: string; etag: string | null; unchanged: boolean }>;
   getRun: (runId: string, signal?: AbortSignal) => Promise<Run>;
   getTimeline: (runId: string, options?: { etag?: string; signal?: AbortSignal }) => Promise<{ events: TimelineEvent[]; revision: string; etag: string | null; unchanged: boolean }>;
+  getAuditLogs: (runId: string, eventId: string, cursor?: string) => Promise<AuditLogResponse>;
   getEvidence: (runId: string, artifact: Artifact) => Promise<{ content: string; sha256: string }>;
   getFeedback: (runId: string) => Promise<Feedback[]>;
   recordFeedback: (run: Run, artifact: Artifact, stageId: string, comment: string) => Promise<Feedback>;
@@ -200,6 +213,10 @@ export const apiClient: ApiClient = {
     if (response.status === 304) return { events: [], revision: etag ?? "", etag: response.headers.get("etag") ?? etag ?? null, unchanged: true };
     const body = await json(response);
     return { events: body.items, revision: body.revision, etag: response.headers.get("etag"), unchanged: false };
+  },
+  async getAuditLogs(runId, eventId, cursor) {
+    const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
+    return json(await fetch(`${base}/workbench/runs/${encodeURIComponent(runId)}/timeline/${encodeURIComponent(eventId)}/logs${query}`));
   },
   async getEvidence(runId, artifact) {
     const response = await fetch(

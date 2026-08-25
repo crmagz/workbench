@@ -20,6 +20,17 @@ const run: Run = {
 };
 const mcpGrant = { role: "developer", server_id: "github_readonly_mcp", server_version: "1.0.0", server_manifest_sha256: "b".repeat(64), tool_name: "catalog_read", input_schema_sha256: "c".repeat(64), repository_scope: "acme/api-gateway" };
 
+test("reads audit output through the fixed run and event route", async () => {
+  const fetchMock = jest.fn(async () => ({ ok: true, json: async () => ({ availability: "available", lines: [], next_cursor: null }) } as Response));
+  global.fetch = fetchMock as unknown as typeof fetch;
+
+  await apiClient.getAuditLogs("run / one", "event / one", "cursor+one");
+
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/api/cogito/api/v1/workbench/runs/run%20%2F%20one/timeline/event%20%2F%20one/logs?cursor=cursor%2Bone"
+  );
+});
+
 test("submits the exact displayed digest to the authoritative action route", async () => {
   const fetchMock = jest.fn<(url: string, options: RequestInit) => Promise<Response>>(async () => (
     { ok: true, status: 202, json: async () => ({ decision_id: "decision-1" }) } as Response
