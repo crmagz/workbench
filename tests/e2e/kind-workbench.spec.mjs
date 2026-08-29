@@ -76,15 +76,17 @@ test("renders a real Kind-backed scoped Workbench run", async ({ page }) => {
     await page.goto(origin);
     await expect(page.getByRole("heading", { name: "Mission Control" })).toBeVisible();
     await page.getByText(readOnlyRunId.slice(0, 8), { exact: false }).first().click();
-    await expect(page.getByRole("button", { name: "Focus Specification", exact: true })).toBeVisible();
-    await page.getByRole("button", { name: "Focus Specification", exact: true }).click();
-    await expect(page.getByRole("button", { name: "Focus Specification", exact: true })).toHaveAttribute("aria-pressed", "true");
-    await expect(page.getByLabel("Selected workflow phase")).toContainText("Specification");
-    await expect(page.getByRole("heading", { name: "Workflow specification workspace" })).toBeVisible();
-    await expect(page.getByLabel("Specification YAML composition", { exact: true })).toBeVisible();
-    await expect(page.getByLabel("Specification YAML composition", { exact: true })).toContainText('apiVersion: "cogito.dev/v1"');
-    await page.getByLabel("Specification format").getByRole("button", { name: "Canonical JSON", exact: true }).click();
-    await expect(page.getByLabel("Specification canonical JSON", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Focus Work specification", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Focus Work specification", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Focus Work specification", exact: true })).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByLabel("Selected workflow phase")).toContainText("Work specification");
+    await expect(page.getByText("One Work Specification workspace: submitted intent, normalized requirements, and readiness evidence.")).toBeVisible();
+    await expect(page.getByLabel("Work Specification YAML composition", { exact: true })).toBeVisible();
+    await expect(page.getByLabel("Work Specification YAML composition", { exact: true })).toContainText('apiVersion: "cogito.dev/v1"');
+    await expect(page.locator(".specification-evidence-pane").filter({ hasText: "Normalized requirements" })).toBeVisible();
+    await expect(page.locator(".specification-evidence-pane").filter({ hasText: "Readiness evidence" })).toBeVisible();
+    await page.getByLabel("Work Specification format").getByRole("button", { name: "Canonical JSON", exact: true }).click();
+    await expect(page.getByLabel("Work Specification canonical JSON", { exact: true })).toBeVisible();
   } finally {
     await close(server);
   }
@@ -108,7 +110,7 @@ test("renders bounded redacted stage output in Kind-backed audit activity", asyn
   }
 });
 
-test("accepts a product specification and focuses its completed evaluation", async ({ page }) => {
+test("reviews the single Work Specification workspace before planning", async ({ page }) => {
   test.skip(!readOnlyRunId, "set COGITO_E2E_RUN_ID to exercise the product specification acceptance path");
   if (!upstreamUrl || !token) {
     throw new Error("COGITO_E2E_UPSTREAM_URL and COGITO_E2E_UPSTREAM_TOKEN are required");
@@ -116,10 +118,10 @@ test("accepts a product specification and focuses its completed evaluation", asy
   const { server, origin } = await startWorkbenchRelay();
   try {
     await page.goto(`${origin}/workflows/${encodeURIComponent(readOnlyRunId)}`);
-    await page.getByRole("button", { name: "Focus Specification", exact: true }).click();
-    await expect(page.getByRole("button", { name: "Focus Specification", exact: true })).toHaveAttribute("aria-pressed", "true");
-    await expect(page.getByLabel("Full workflow specifications")).toBeVisible();
-    await expect(page.getByLabel("Specification YAML composition", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Focus Work specification", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Focus Work specification", exact: true })).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByText("One Work Specification workspace: submitted intent, normalized requirements, and readiness evidence.")).toBeVisible();
+    await expect(page.getByLabel("Work Specification YAML composition", { exact: true })).toBeVisible();
     await expect(page.getByLabel("Product specification YAML composition", { exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Accept" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Needs refinement" })).toBeVisible();
@@ -161,7 +163,7 @@ test("renders real Kind-backed Agent Operations without raw execution evidence",
 
     await page.getByRole("button", { name: new RegExp(`Open workflow for ${agentRole}.*${agentWorkflowRunId.slice(0, 8)}`) }).click();
     await expect(page).toHaveURL(new RegExp(`/workflows/${agentWorkflowRunId}`));
-    await expect(page.getByRole("button", { name: "Focus Specification", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Focus Work specification", exact: true })).toBeVisible();
   } finally {
     await close(server);
   }
