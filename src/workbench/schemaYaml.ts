@@ -61,10 +61,10 @@ export function renderSchemaYaml(content: string, artifact: Pick<Artifact, "kind
     const { schema_version: schemaVersion, ...specification } = contract;
     const metadata: { [key: string]: JsonValue } = { artifactSha256: artifact.sha256 };
     if (schemaVersion !== undefined) metadata.schemaVersion = schemaVersion;
-    if (artifact.kind === "product_specification" && revision !== null && revision !== undefined) metadata.revision = revision;
+    if ((artifact.kind === "product_specification" || artifact.kind === "work_specification") && revision !== null && revision !== undefined) metadata.revision = revision;
     const composition: JsonValue = {
       apiVersion: "cogito.dev/v1",
-      kind: artifact.kind === "source" ? "SubmittedSpecification" : "ProductSpecification",
+      kind: artifact.kind === "source" ? "SubmittedSpecification" : artifact.kind === "work_specification" ? "WorkSpecification" : "ProductSpecification",
       metadata,
       spec: specification
     };

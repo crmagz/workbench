@@ -17,6 +17,13 @@ describe("renderSchemaYaml", () => {
     expect(rendered).toContain('      kind: "approval"');
   });
 
+  test("labels the operator-facing contract as a Work Specification", () => {
+    const rendered = renderSchemaYaml('{"requirement_ids":["freq_7"]}', { kind: "work_specification", sha256: "c".repeat(64) }, 3);
+
+    expect(rendered).toContain('kind: "WorkSpecification"');
+    expect(rendered).toContain("  revision: 3");
+  });
+
   test("unwraps the persisted source-artifact envelope for the YAML composition", () => {
     const contract = JSON.stringify({ schema_version: "cogito.initial-specification/v1", goal: "Scaffold a uv project", repositories: [{ ref: "https://github.com/crmagz/cogito-kind-e2e-fixture.git#abc" }] });
     const rendered = renderSchemaYaml(JSON.stringify({ initial_specification: contract }), { kind: "source", sha256: "d".repeat(64) });
