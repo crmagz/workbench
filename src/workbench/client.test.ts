@@ -133,7 +133,7 @@ test("submits acceptance for the displayed revision and reuses its key after an 
   await expect(apiClient.acceptProductSpecification(specificationRun)).resolves.toEqual({ outcome: "accepted" });
 
   expect(fetchMock).toHaveBeenCalledWith(
-    "/api/cogito/api/v1/planning-runs/run-123/accept-product-specification",
+    "/api/cogito/api/v1/planning-runs/run-123/accept-work-specification",
     expect.objectContaining({ method: "POST", headers: expect.objectContaining({ "Idempotency-Key": expect.any(String) }) })
   );
   expect(fetchMock.mock.calls[0]![1].headers).toEqual(fetchMock.mock.calls[1]![1].headers);
