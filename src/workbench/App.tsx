@@ -13,13 +13,19 @@ type ShellNav = "mission" | "workflows" | "runs" | "agents" | "tools" | "dataset
 type NodeDossierTab = "overview" | "audit" | "specifications" | "configuration" | "dependencies" | "history";
 type ShellView = "mission" | "control-center";
 type WorkflowView = ShellView | "canvas" | "node" | "legacy";
-type LifecyclePhaseId = "specification" | "product_specification" | "specification_evaluation" | "planning" | "plan_approval" | "implementation" | "implementation_approval";
-type ArtifactSet = "source" | "product_specification" | "plan";
+type LifecyclePhaseId = "work_specification" | "specification" | "product_specification" | "specification_evaluation" | "planning" | "plan_approval" | "implementation" | "implementation_approval";
+type ArtifactSet = "work_specification" | "source" | "product_specification" | "plan";
 const PHASE_ARTIFACTS: Record<LifecyclePhaseId, ArtifactSet> = {
+  work_specification: "work_specification",
   specification: "source", product_specification: "product_specification", specification_evaluation: "product_specification",
   planning: "plan", plan_approval: "plan", implementation: "plan", implementation_approval: "plan"
 };
-const lifecyclePhaseIds: LifecyclePhaseId[] = ["specification", "product_specification", "specification_evaluation", "planning", "plan_approval", "implementation", "implementation_approval"];
+const lifecyclePhaseIds: LifecyclePhaseId[] = ["work_specification", "planning", "plan_approval", "implementation", "implementation_approval"];
+const legacyLifecyclePhaseIds: LifecyclePhaseId[] = ["specification", "product_specification", "specification_evaluation", "planning", "plan_approval", "implementation", "implementation_approval"];
+const allLifecyclePhaseIds: LifecyclePhaseId[] = [...lifecyclePhaseIds, "specification", "product_specification", "specification_evaluation"];
+function lifecyclePhasesFor(run: Run): LifecyclePhaseId[] {
+  return run.stages?.some((stage) => stage.stage_id === "work_specification") ? lifecyclePhaseIds : legacyLifecyclePhaseIds;
+}
 type WorkflowNode = { id: string; name: string; type: "agent" | "gate" | "queue"; status: string; availability: Stage["availability"]; artifactKind: Artifact["kind"] | null; reason: string; position?: { x: number; y: number; width: number }; metric: string };
 type WorkflowEdge = { fromNodeId: string; toNodeId: string; style: "solid" | "dashed"; emphasis: "primary" | "secondary" };
 type PositionedWorkflowNode = WorkflowNode & { position: { x: number; y: number; width: number } };
@@ -70,7 +76,7 @@ function readStoredTheme(): Theme {
 }
 function evidenceFor(run: Run, kind: Artifact["kind"]) { return run.artifacts.find((artifact) => artifact.kind === kind) ?? null; }
 function artifactLabel(kind: Artifact["kind"]) {
-  return kind === "source" ? "Specification" : kind === "product_specification" ? "Product specification" : kind === "specification_evaluation" ? "Specification evaluation" : kind;
+  return kind === "work_specification" ? "Work Specification" : kind === "source" ? "Specification" : kind === "product_specification" ? "Product specification" : kind === "specification_evaluation" ? "Specification evaluation" : kind;
 }
 function isWaiting(run: Run) { return run.active_gate !== null; }
 function filterRun(run: Run, filter: InboxFilter, search: string) {
@@ -256,10 +262,16 @@ function EvidenceViewer({ client, run, initial, heading = "Verified immutable ev
   return workflowLabels ? <WorkflowSpecificationWorkspace client={client} run={run} initial={initial} heading={heading} onComplete={onComplete} onDecisionComplete={onDecisionComplete} /> : <ImmutableEvidenceViewer client={client} run={run} initial={initial} heading={heading} />;
 }
 
-function WorkflowSpecificationWorkspace({ client, run, initial, heading, onComplete, onDecisionComplete, artifactSet = "source", actionable = true }: { client: ApiClient; run: Run; initial?: Artifact["kind"]; heading: string; onComplete: () => Promise<void | boolean>; onDecisionComplete?: () => void; artifactSet?: ArtifactSet; actionable?: boolean }) {
-  const artifacts = run.artifacts.filter((artifact) => artifact.kind === artifactSet);
-  const supportingCopy = artifactSet === "plan" ? "The immutable plan is the main artifact for this phase." : artifactSet === "source" ? "The submitted specification is the main artifact for this phase." : "The product specification is the main artifact for this phase.";
-  return <section className={`workflow-specifications artifact-set-${artifactSet}`} aria-labelledby="workflow-specification-workspace-title"><div className="section-heading"><div><p className="eyebrow">Workflow specification workspace</p><h3 id="workflow-specification-workspace-title">{heading}</h3></div><small>{supportingCopy}</small></div><div className="workflow-specification-workspace"><SpecificationEvidencePanes client={client} run={run} artifacts={artifacts} initial={initial} />{actionable ? <>{artifactSet === "product_specification" && <ProductSpecificationControls client={client} run={run} onComplete={onComplete} showHeading={false} compact />}{run.active_gate && <DecisionControls client={client} run={run} onComplete={onComplete} onSuccess={onDecisionComplete} workflowLabels />}</> : <p className="inspection-only-note">Inspection mode — workflow decisions remain available only when viewing the authoritative current phase.</p>}{run.active_gate !== "plan" && <McpCapabilityEvidence run={run} />}</div></section>;
+function WorkflowSpecificationWorkspace({ client, run, initial, heading, onComplete, onDecisionComplete, artifactSet = "work_specification", actionable = true }: { client: ApiClient; run: Run; initial?: Artifact["kind"]; heading: string; onComplete: () => Promise<void | boolean>; onDecisionComplete?: () => void; artifactSet?: ArtifactSet; actionable?: boolean }) {
+  const artifacts = artifactSet === "work_specification"
+    ? run.artifacts.filter((artifact) => ["work_specification", "product_specification", "specification_evaluation"].includes(artifact.kind))
+    : run.artifacts.filter((artifact) => artifact.kind === artifactSet);
+  const supportingCopy = artifactSet === "plan"
+    ? "The immutable plan is the main artifact for this phase."
+    : artifactSet === "work_specification"
+    ? "One Work Specification workspace: submitted intent, normalized requirements, and readiness evidence."
+    : artifactSet === "source" ? "The submitted specification is the main artifact for this phase." : "The product specification is the main artifact for this phase.";
+  return <section className={`workflow-specifications artifact-set-${artifactSet}`} aria-labelledby="workflow-specification-workspace-title"><div className="section-heading"><div><p className="eyebrow">Workflow specification workspace</p><h3 id="workflow-specification-workspace-title">{heading}</h3></div><small>{supportingCopy}</small></div><div className="workflow-specification-workspace"><SpecificationEvidencePanes client={client} run={run} artifacts={artifacts} initial={initial} />{actionable ? <>{["work_specification", "product_specification"].includes(artifactSet) && <ProductSpecificationControls client={client} run={run} onComplete={onComplete} showHeading={false} compact />}{run.active_gate && <DecisionControls client={client} run={run} onComplete={onComplete} onSuccess={onDecisionComplete} workflowLabels />}</> : <p className="inspection-only-note">Inspection mode — workflow decisions remain available only when viewing the authoritative current phase.</p>}{run.active_gate !== "plan" && <McpCapabilityEvidence run={run} />}</div></section>;
 }
 
 function SpecificationEvidencePanes({ client, run, artifacts, initial }: { client: ApiClient; run: Run; artifacts: Artifact[]; initial?: Artifact["kind"] }) {
@@ -286,7 +298,7 @@ function SpecificationEvidencePane({ artifact, content, loaded, revision }: { ar
   const schemaYaml = loaded ? renderSchemaYaml(content ?? "", artifact, revision) : null;
   const canShowYaml = schemaYaml !== null;
   const activeFormat = format === "yaml" && canShowYaml ? "yaml" : "json";
-  const artifactEyebrow = artifact.kind === "source" ? "Submitted specification" : artifact.kind === "product_specification" ? "Product specification" : "Plan";
+  const artifactEyebrow = artifact.kind === "work_specification" ? "Submitted Work Specification" : artifact.kind === "source" ? "Submitted specification" : artifact.kind === "product_specification" ? "Normalized requirements" : artifact.kind === "specification_evaluation" ? "Readiness evidence" : "Plan";
   return <section className="specification-evidence-pane"><header><div><p className="eyebrow">{artifactEyebrow} · main artifact for this phase</p><h4>{label}</h4></div><small className="mono">{artifact.sha256}</small></header>{loaded ? <><div className="specification-format-tabs" role="group" aria-label={`${label} format`}><button type="button" aria-pressed={activeFormat === "yaml"} disabled={!canShowYaml} onClick={() => setFormat("yaml")}>Schema YAML</button><button type="button" aria-pressed={activeFormat === "json"} onClick={() => setFormat("json")}>Canonical JSON</button></div><pre className="evidence-json" aria-label={`${label} ${activeFormat === "yaml" ? "YAML composition" : "canonical JSON"}`}>{activeFormat === "yaml" ? yamlSyntax(schemaYaml ?? content ?? "") : prettyEvidence(content ?? "")}</pre>{!canShowYaml && <p className="control-note">This artifact is not valid JSON, so its canonical evidence is shown.</p>}</> : <p className="control-note" role="status">Loading verified artifact…</p>}</section>;
 }
 
@@ -330,14 +342,14 @@ function ProductSpecificationControls({ client, run, onComplete, showHeading = t
   const hasAction = (actionId: string) => run.available_actions?.some((action) => action.action_id === actionId) ?? false;
   const act = async (action: () => Promise<void>, message: string, pendingMessage?: string) => {
     try { setPending(true); setNotice(pendingMessage ?? null); await action(); const refreshed = await onComplete(); if (refreshed === false) { setNotice("Action was accepted, but the authoritative workflow could not be refreshed. Refresh before continuing."); return false; } setNotice(message); return true; }
-    catch (reason) { setNotice(reason instanceof Error ? reason.message : "The product specification action could not be completed."); return false; }
+    catch (reason) { setNotice(reason instanceof Error ? reason.message : "The Work Specification action could not be completed."); return false; }
     finally { setPending(false); }
   };
   useEffect(() => {
     const request = ++revisionLoadRef.current;
     if (!editing || !mutable || !artifact || !hasMutableRevision || specificationRevision === undefined) return;
     if (revisionDirty && revisionParent && (revisionParent.revision !== specificationRevision || revisionParent.artifactSha256 !== artifact.sha256)) {
-      setRevisionStale(true); setLoadingRevision(false); setNotice("A newer product specification is available. Your unsaved edit is preserved; reload before saving it.");
+      setRevisionStale(true); setLoadingRevision(false); setNotice("A newer Work Specification revision is available. Your unsaved edit is preserved; reload before saving it.");
       return;
     }
     setLoadingRevision(true); setNotice(null);
@@ -348,7 +360,7 @@ function ProductSpecificationControls({ client, run, onComplete, showHeading = t
       setRevisionParent({ revision: specificationRevision, artifactSha256: artifact.sha256 });
       setRevisionDirty(false); setRevisionStale(false);
     }).catch((reason) => {
-      if (request === revisionLoadRef.current) setNotice(reason instanceof Error ? reason.message : "The immutable product specification could not be loaded.");
+      if (request === revisionLoadRef.current) setNotice(reason instanceof Error ? reason.message : "The immutable normalized requirements could not be loaded.");
     }).finally(() => { if (request === revisionLoadRef.current) setLoadingRevision(false); });
   }, [artifact?.sha256, client, editing, hasMutableRevision, mutable, revisionReload, run.run_id, specificationRevision]);
   useEffect(() => { if (editing && !loadingRevision) editorRef.current?.focus(); }, [editing, loadingRevision]);
@@ -366,29 +378,29 @@ function ProductSpecificationControls({ client, run, onComplete, showHeading = t
   }, [confirmingCancellation]);
   const submitRevision = async () => {
     if (revisionStale || !artifact || !revisionParent || revisionParent.revision !== specificationRevision || revisionParent.artifactSha256 !== artifact.sha256) {
-      setRevisionStale(true); setNotice("A newer product specification is available. Reload it before saving this revision.");
+      setRevisionStale(true); setNotice("A newer Work Specification revision is available. Reload it before saving this revision.");
       return;
     }
     let parsed: unknown;
-    try { parsed = JSON.parse(revisionText); } catch { setNotice("Enter a complete valid JSON product specification before saving."); return; }
-    const recorded = await act(() => client.reviseProductSpecification(run, revisionParent, parsed), "Refined specification saved. Review the new revision before accepting it.");
+    try { parsed = JSON.parse(revisionText); } catch { setNotice("Enter a complete valid JSON Work Specification before saving."); return; }
+    const recorded = await act(() => client.reviseProductSpecification(run, revisionParent, parsed), "Refined Work Specification saved. Review the new revision before accepting it.");
     if (recorded) { setRevisionText(""); setRevisionParent(null); setEditing(false); }
   };
   const accept = async () => {
     setConfirmingAcceptance(false);
     setEditing(false);
     try {
-      setPending(true); setNotice("Specification evaluation accepted. Planning agent is generating the immutable plan.");
+      setPending(true); setNotice("Work Specification approval is being recorded. The planning agent will generate the immutable plan.");
       const acceptance = await client.acceptProductSpecification(run);
       const refreshed = await onComplete();
       if (refreshed === false) { setNotice("Acceptance was recorded, but the authoritative workflow could not be refreshed. Refresh before continuing."); return; }
       if (acceptance.outcome === "needs_refinement") {
         setEditing(true);
-        setNotice("Specification needs refinement. Resolve the recorded findings before it can be used for planning.");
+        setNotice("The Work Specification needs refinement. Resolve the recorded findings before it can be used for planning.");
         return;
       }
-      setNotice("Specification accepted. Planning agent is generating the immutable plan.");
-    } catch (reason) { setNotice(reason instanceof Error ? reason.message : "The specification could not be accepted."); }
+      setNotice("Work Specification approved. The planning agent is generating the immutable plan.");
+    } catch (reason) { setNotice(reason instanceof Error ? reason.message : "The Work Specification could not be approved."); }
     finally { setPending(false); }
   };
   const closeAcceptance = (continueEditing = false) => { setConfirmingAcceptance(false); if (continueEditing) setEditing(true); };
@@ -397,15 +409,15 @@ function ProductSpecificationControls({ client, run, onComplete, showHeading = t
     if (cancelled) setConfirmingCancellation(false);
   };
   const closeCancellation = () => setConfirmingCancellation(false);
-  return <section className={compact ? "product-specification-controls" : "card dossier-section"}>{showHeading && <h2 className="panel-title">Product specification</h2>}<div className={compact ? undefined : "dossier-section-body"}>
-    {!mutable && <p className="control-note">This product specification is immutable because the run is no longer in refinement.</p>}
-    {mutable && artifact && !hasMutableRevision && <p className="control-note">The displayed product specification revision is unavailable. Refresh the run before editing or accepting it.</p>}
-    {mutable && !artifact && hasAction("generate_product_specification") && <div className="form-actions"><button className="button-primary" disabled={pending} aria-busy={pending} onClick={() => void act(() => client.generateProductSpecification(run.run_id), "Draft generated. Review it before accepting or refining it.", "Planner agent is generating the product specification. This stage will move to review when immutable evidence is recorded.")}>{pending ? "Planner agent running…" : "Proceed"}</button>{hasAction("cancel_planning_run") && <button ref={cancellationTriggerRef} className="button-danger" disabled={pending} onClick={() => setConfirmingCancellation(true)}>Cancel</button>}</div>}
+  return <section className={compact ? "product-specification-controls" : "card dossier-section"}>{showHeading && <h2 className="panel-title">Work Specification</h2>}<div className={compact ? undefined : "dossier-section-body"}>
+    {!mutable && <p className="control-note">This Work Specification is immutable because the run is no longer in refinement.</p>}
+    {mutable && artifact && !hasMutableRevision && <p className="control-note">The displayed Work Specification revision is unavailable. Refresh the run before editing or approving it.</p>}
+    {mutable && !artifact && hasAction("generate_product_specification") && <div className="form-actions"><button className="button-primary" disabled={pending} aria-busy={pending} onClick={() => void act(() => client.generateProductSpecification(run.run_id), "Requirements normalized. Review the Work Specification before approving or refining it.", "Cogito is deriving normalized requirements from the Work Specification.")}>{pending ? "Normalizing requirements…" : "Proceed"}</button>{hasAction("cancel_planning_run") && <button ref={cancellationTriggerRef} className="button-danger" disabled={pending} onClick={() => setConfirmingCancellation(true)}>Cancel</button>}</div>}
     {mutable && artifact && hasMutableRevision && hasAction("accept_product_specification") && <div className="form-actions"><button ref={acceptanceTriggerRef} className="button-primary" disabled={pending} onClick={() => setConfirmingAcceptance(true)}>Accept</button>{hasAction("refine_product_specification") && <button className="button-secondary" disabled={pending} onClick={() => setEditing(true)}>Needs refinement</button>}{hasAction("cancel_planning_run") && <button ref={cancellationTriggerRef} className="button-danger" disabled={pending} onClick={() => setConfirmingCancellation(true)}>Cancel</button>}</div>}
     {mutable && artifact && hasMutableRevision && !selected && !editing && hasAction("refine_product_specification") && !hasAction("accept_product_specification") && <div className="form-actions"><button className="button-secondary" disabled={pending} onClick={() => setEditing(true)}>Needs refinement</button>{hasAction("cancel_planning_run") && <button ref={cancellationTriggerRef} className="button-danger" disabled={pending} onClick={() => setConfirmingCancellation(true)}>Cancel</button>}</div>}
     {mutable && selected && hasAction("cancel_planning_run") && <div className="form-actions"><button ref={cancellationTriggerRef} className="button-danger" disabled={pending} onClick={() => setConfirmingCancellation(true)}>Cancel</button></div>}
     {mutable && artifact && hasMutableRevision && editing && <div className="specification-editor"><label className="form-field" htmlFor="product-specification-revision"><span>Editable product specification JSON</span><div className="syntax-textarea"><pre ref={syntaxLayerRef} aria-hidden="true" className="evidence-json syntax-textarea-layer">{jsonSyntax(revisionText)}</pre><textarea ref={editorRef} id="product-specification-revision" className="form-textarea syntax-textarea-input" value={revisionText} onChange={(event) => { setRevisionText(event.target.value); setRevisionDirty(true); }} onScroll={(event) => syntaxLayerRef.current?.scrollTo({ top: event.currentTarget.scrollTop, left: event.currentTarget.scrollLeft })} aria-describedby="product-specification-revision-help" disabled={loadingRevision || pending} /></div></label><p id="product-specification-revision-help" className="form-help">Save a complete new revision for review. Saving does not accept the specification.</p><div className="form-actions"><button className="button-primary" disabled={revisionStale || loadingRevision || pending || !revisionText} onClick={() => void submitRevision()}>{loadingRevision ? "Loading specification…" : "Save refined specification"}</button>{revisionStale && <button className="button-secondary" disabled={pending} onClick={() => { setRevisionDirty(false); setRevisionStale(false); setRevisionReload((value) => value + 1); }}>Reload latest specification</button>}</div></div>}
-    {selected && <p className="sync-row" role="status">Product specification revision {run.selected_product_specification_revision} is accepted for planning.</p>}
+    {selected && <p className="sync-row" role="status">Work Specification revision {run.selected_product_specification_revision} is approved for planning.</p>}
     {notice && <p className="sync-row" role="status">{notice}</p>}
   </div>{confirmingAcceptance && mutable && <div className="specification-edit-scrim" onMouseDown={() => !pending && closeAcceptance()}><section ref={acceptanceDialogRef} className="specification-edit-dialog" role="dialog" aria-modal="true" aria-labelledby="specification-acceptance-title" onMouseDown={(event) => event.stopPropagation()} onKeyDown={(event) => trapDialogFocus(event, () => !pending && closeAcceptance())} tabIndex={-1}><h3 id="specification-acceptance-title">Confirm specification</h3><p>Accept this immutable revision as the planning contract. Evaluation findings are recorded for traceability, then planning starts automatically; choose Needs refinement only when you want to revise it.</p><div className="form-actions"><button className="button-primary" disabled={pending} aria-busy={pending} onClick={() => void accept()}>{pending ? "Planning agent running…" : "Confirm specification"}</button><button className="button-secondary" disabled={pending} onClick={() => closeAcceptance(true)}>Continue editing</button></div></section></div>}{confirmingCancellation && mutable && <div className="specification-edit-scrim" onMouseDown={() => !pending && closeCancellation()}><section ref={cancellationDialogRef} className="specification-edit-dialog" role="dialog" aria-modal="true" aria-labelledby="planning-cancellation-title" onMouseDown={(event) => event.stopPropagation()} onKeyDown={(event) => trapDialogFocus(event, () => !pending && closeCancellation())} tabIndex={-1}><h3 id="planning-cancellation-title">Cancel planning run</h3><p>This terminal action stops the run before a plan is generated. It cannot be resumed.</p><div className="form-actions"><button className="button-danger" disabled={pending} aria-busy={pending} onClick={() => void cancel()}>{pending ? "Cancelling…" : "Confirm cancel"}</button><button className="button-secondary" disabled={pending} onClick={closeCancellation}>Keep working</button></div></section></div>}</section>;
 }
@@ -503,7 +515,7 @@ function graphFor(run: Run): { nodes: PositionedWorkflowNode[]; edges: WorkflowE
     id: node.stage_id, name: node.label, type: node.node_type, status: node.state, availability: node.availability,
     artifactKind: node.artifact_kind, reason: node.reason, metric: node.artifact_kind ? String(run.artifacts.filter((artifact) => artifact.kind === node.artifact_kind).length) : "—"
   })) : (run.stages ?? []).map((stage) => ({
-    id: stage.stage_id, name: stage.label, type: stage.stage_id.includes("approval") ? "gate" : stage.stage_id === "specification" ? "queue" : "agent", status: stage.state, availability: stage.availability,
+    id: stage.stage_id, name: stage.label, type: stage.stage_id.includes("approval") ? "gate" : stage.stage_id === "work_specification" || stage.stage_id === "specification" ? "queue" : "agent", status: stage.state, availability: stage.availability,
     artifactKind: stage.artifact_kind, reason: stage.reason, metric: stage.artifact_kind ? String(run.artifacts.filter((artifact) => artifact.kind === stage.artifact_kind).length) : "—"
   }));
   const edges: WorkflowEdge[] = graph ? graph.edges.map((edge) => ({
@@ -567,10 +579,10 @@ function WorkflowMap({ run, timeline, onEvidence }: { run: Run; timeline: Timeli
 
 function preferredWorkflowNodeId(nodes: PositionedWorkflowNode[], activeGate: Run["active_gate"]) {
   const planning = nodes.find((node) => node.id === "planning");
-  const evaluation = nodes.find((node) => node.id === "specification_evaluation");
-  // Acceptance records evaluation and starts planning in one command. Keep
-  // the completed evaluation visible only until the planning agent begins.
-  if ((planning?.status === "awaiting_operator" || planning?.status === "queued") && evaluation?.status === "completed") return evaluation.id;
+  const workSpecification = nodes.find((node) => node.id === "work_specification");
+  const legacyEvaluation = nodes.find((node) => node.id === "specification_evaluation");
+  if ((planning?.status === "awaiting_operator" || planning?.status === "queued") && workSpecification?.status === "completed") return workSpecification.id;
+  if ((planning?.status === "awaiting_operator" || planning?.status === "queued") && legacyEvaluation?.status === "completed") return legacyEvaluation.id;
   return nodes.find((node) => node.id === `${activeGate}_approval`)?.id
     ?? nodes.find((node) => node.status === "in_progress")?.id
     ?? nodes.find((node) => node.status === "queued")?.id
@@ -654,16 +666,16 @@ function VisualizeOverlay({ graph, title, onClose, onSelect }: { graph: ReturnTy
   return createPortal(<div className="visualize-overlay" role="presentation" onMouseDown={onClose}><section ref={dialogRef} className="visualize-dialog" role="dialog" aria-modal="true" aria-labelledby="visualize-title" tabIndex={-1} onMouseDown={(event) => event.stopPropagation()} onKeyDown={(event) => trapDialogFocus(event, onClose)}><header><div><p className="eyebrow">Relay-grid visualization</p><h2 id="visualize-title">{title}</h2></div><button className="visualize-close-button" aria-label="Close visualization" onClick={onClose}>✕ Close</button></header><div className="visualize-canvas-body"><p className="control-note">Scroll at 100% scale to inspect the computed workflow layout. Selecting a node returns to its phase workspace.</p><ComputedRelayCanvas graph={graph} onSelect={onSelect} /></div></section></div>, document.body);
 }
 
-function phaseIdFor(node: PositionedWorkflowNode): LifecyclePhaseId | null { return lifecyclePhaseIds.includes(node.id as LifecyclePhaseId) ? node.id as LifecyclePhaseId : null; }
+function phaseIdFor(node: PositionedWorkflowNode): LifecyclePhaseId | null { return allLifecyclePhaseIds.includes(node.id as LifecyclePhaseId) ? node.id as LifecyclePhaseId : null; }
 function currentPhaseId(graph: ReturnType<typeof graphFor>, run: Run): LifecyclePhaseId {
   const preferred = graph.nodes.find((node) => node.id === preferredWorkflowNodeId(graph.nodes, run.active_gate));
-  return preferred ? phaseIdFor(preferred) ?? "specification" : "specification";
+  return preferred ? phaseIdFor(preferred) ?? "work_specification" : "work_specification";
 }
 
 function WorkflowControlCenter({ client, run, timeline, selectedPhase, canvasOverlayOpen, onBack, onSelectPhase, onVisualize, onCloseVisualize, onRefresh, decisionNotice, onDecisionComplete }: { client: ApiClient; run: Run; timeline: TimelineEvent[]; selectedPhase: LifecyclePhaseId; canvasOverlayOpen: boolean; onBack: () => void; onSelectPhase: (phase: LifecyclePhaseId) => void; onVisualize: () => void; onCloseVisualize: () => void; onRefresh: () => Promise<void | boolean>; decisionNotice: string | null; onDecisionComplete: () => void }) {
   const graph = graphFor(run);
-  const canonicalPhases = lifecyclePhaseIds.map((phase) => graph.nodes.find((node) => node.id === phase) ?? {
-    id: phase, name: statusLabel(phase).replace(/^./, (letter) => letter.toUpperCase()), type: phase.includes("approval") ? "gate" : phase === "specification" ? "queue" : "agent",
+  const canonicalPhases = lifecyclePhasesFor(run).map((phase) => graph.nodes.find((node) => node.id === phase) ?? {
+    id: phase, name: statusLabel(phase).replace(/^./, (letter) => letter.toUpperCase()), type: phase.includes("approval") ? "gate" : phase === "work_specification" || phase === "specification" ? "queue" : "agent",
     status: "unavailable", availability: "unavailable", artifactKind: null, reason: "This lifecycle phase has not been recorded for the run.", metric: "—",
     position: { x: 0, y: 0, width: 200 }
   } satisfies PositionedWorkflowNode);
@@ -701,7 +713,7 @@ function controlCenterRoute(run: Run, phase: LifecyclePhaseId, visualize = false
 }
 function readRoute(): RouteState {
   const query = new URLSearchParams(window.location.search);
-  const phase = query.get("phase"); const selectedPhase = lifecyclePhaseIds.includes(phase as LifecyclePhaseId) ? phase as LifecyclePhaseId : null;
+  const phase = query.get("phase"); const selectedPhase = allLifecyclePhaseIds.includes(phase as LifecyclePhaseId) ? phase as LifecyclePhaseId : null;
   const base = { selectedPhase, canvasOverlayOpen: query.get("visualize") === "1" };
   if (window.location.pathname === "/agents") return { ...base, runId: null, nodeId: null, nodeTab: "overview", tab: "summary", view: "mission", agents: true, agentProjectId: query.get("project_id") };
   const node = window.location.pathname.match(/^\/workflows\/([^/]+)\/nodes\/([^/]+)\/(overview|audit|specifications|configuration|dependencies|history)$/);
@@ -732,7 +744,7 @@ export function App({ client = apiClient }: { client?: ApiClient }) {
   useEffect(() => { try { window.localStorage.setItem("workbench-theme", theme); } catch { /* preference storage is optional */ } }, [theme]);
   useEffect(() => { const listener = () => { const current = readRoute(); routeRunIdRef.current = current.runId; setRouteRunId(current.runId); setRouteView(current.view); setSelectedPhase(current.selectedPhase); setCanvasOverlayOpen(current.canvasOverlayOpen); setNodeId(current.nodeId); setNodeTab(current.nodeTab); setTabState(current.tab); if (current.agents && current.agentProjectId) setSelectedProject(current.agentProjectId); setSurface(current.agents ? "agents" : "mission"); }; window.addEventListener("popstate", listener); return () => window.removeEventListener("popstate", listener); }, []);
   const openCanvas = (run: Run) => { const phase = currentPhaseId(graphFor(run), run); setDecisionNotice(null); setRouteUnavailable(false); routeRunIdRef.current = run.run_id; setSelected(run); setRouteRunId(run.run_id); setRouteView("control-center"); setSelectedPhase(phase); setCanvasOverlayOpen(false); setNodeId(null); window.history.pushState({}, "", controlCenterRoute(run, phase)); };
-  const openInvocationWorkflow = (flow: AgentInvocation) => { const invoked = runs.find((run) => run.run_id === flow.root_run_id) ?? null; const phase = invoked ? currentPhaseId(graphFor(invoked), invoked) : "specification"; setDecisionNotice(null); setRouteUnavailable(false); routeRunIdRef.current = flow.root_run_id; setSelected(invoked); setRouteRunId(flow.root_run_id); setRouteView("control-center"); setSelectedPhase(phase); setCanvasOverlayOpen(false); setNodeId(null); setSurface("mission"); window.history.pushState({}, "", `/runs/${encodeURIComponent(flow.root_run_id)}?phase=${phase}`); };
+  const openInvocationWorkflow = (flow: AgentInvocation) => { const invoked = runs.find((run) => run.run_id === flow.root_run_id) ?? null; const phase = invoked ? currentPhaseId(graphFor(invoked), invoked) : "work_specification"; setDecisionNotice(null); setRouteUnavailable(false); routeRunIdRef.current = flow.root_run_id; setSelected(invoked); setRouteRunId(flow.root_run_id); setRouteView("control-center"); setSelectedPhase(phase); setCanvasOverlayOpen(false); setNodeId(null); setSurface("mission"); window.history.pushState({}, "", `/runs/${encodeURIComponent(flow.root_run_id)}?phase=${phase}`); };
   const openAgentCatalog = () => { detailRequest.current?.abort(); setRouteUnavailable(false); routeRunIdRef.current = null; setRouteRunId(null); setRouteView("mission"); setNodeId(null); setSelected(null); setSurface("agents"); const projectQuery = selectedProject ? `?project_id=${encodeURIComponent(selectedProject)}` : ""; window.history.pushState({}, "", `/agents${projectQuery}`); };
   const selectProject = (projectId: string | undefined) => { setSelectedProject(projectId); if (surface === "agents") { const projectQuery = projectId ? `?project_id=${encodeURIComponent(projectId)}` : ""; window.history.replaceState({}, "", `/agents${projectQuery}`); } };
   const setTab = (nextTab: DetailTab) => { setTabState(nextTab); if (selected) window.history.pushState({}, "", routeFor(selected, nextTab)); };

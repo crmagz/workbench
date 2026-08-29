@@ -246,6 +246,42 @@ test("keeps the completed evaluation in focus after specification acceptance", a
   expect(await screen.findByRole("heading", { name: "Specification evaluation" })).toBeVisible();
 });
 
+test("renders the canonical lifecycle as one Work Specification workspace", async () => {
+  const workSpecificationDigest = "d".repeat(64);
+  const productSpecificationDigest = "e".repeat(64);
+  const evaluationDigest = "f".repeat(64);
+  const canonicalStages: Run["stages"] = [
+    { stage_id: "work_specification", label: "Work Specification", state: "completed", availability: "authoritative", reason: "Submitted intent and derived evidence are ready for review.", artifact_kind: "work_specification" },
+    { stage_id: "planning", label: "Planning", state: "queued", availability: "authoritative", reason: "Awaiting approval.", artifact_kind: null },
+    { stage_id: "plan_approval", label: "Plan approval", state: "unavailable", availability: "unavailable", reason: "Not started.", artifact_kind: null },
+    { stage_id: "implementation", label: "Implementation", state: "unavailable", availability: "unavailable", reason: "Not started.", artifact_kind: null },
+    { stage_id: "implementation_approval", label: "Implementation approval", state: "unavailable", availability: "unavailable", reason: "Not started.", artifact_kind: null },
+  ];
+  const canonicalRun: Run = {
+    ...run,
+    active_gate: null,
+    artifacts: [
+      { kind: "work_specification", sha256: workSpecificationDigest },
+      { kind: "product_specification", sha256: productSpecificationDigest },
+      { kind: "specification_evaluation", sha256: evaluationDigest },
+    ],
+    stages: canonicalStages,
+    workflow_graph: { nodes: canonicalStages.map((stage) => ({ ...stage, node_type: stage.stage_id === "work_specification" ? "queue" : stage.stage_id.includes("approval") ? "gate" : "agent" })), edges: canonicalStages.slice(1).map((stage, index) => ({ source_node_id: canonicalStages[index].stage_id, target_node_id: stage.stage_id, style: "solid", emphasis: "primary" })) },
+  };
+  const user = userEvent.setup();
+  render(<App client={client({ listRuns: async () => ({ runs: [canonicalRun], revision: "canonical", etag: "canonical", unchanged: false }), getRun: async () => canonicalRun })} />);
+
+  await user.click(await screen.findByText(canonicalRun.workflow_id!));
+  expect(await screen.findByRole("button", { name: "Focus Work Specification" })).toBeVisible();
+  expect(screen.queryByRole("button", { name: "Focus Product specification" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Focus Specification evaluation" })).not.toBeInTheDocument();
+  expect(screen.getAllByRole("button", { name: /^Focus / })).toHaveLength(5);
+  expect(screen.getByText("One Work Specification workspace: submitted intent, normalized requirements, and readiness evidence.")).toBeVisible();
+  expect(await screen.findByText("Submitted Work Specification", { exact: false })).toBeVisible();
+  expect(screen.getAllByText("Normalized requirements", { exact: false }).at(-1)).toBeVisible();
+  expect(screen.getAllByText("Readiness evidence", { exact: false }).at(-1)).toBeVisible();
+});
+
 test("renders project-scoped agent operations without offering execution controls", async () => {
   const agent = {
     registration_id: "developer", registration_version: "1.0.0", manifest_sha256: "b".repeat(64), component_id: "developer", component_version: "1.0.0", lifecycle: "active", maturity: "active", execution_class: "adapter", owner: "cogito-platform", capabilities: ["develop"],
@@ -537,7 +573,7 @@ test("confirms acceptance or continues editing a product specification", async (
   await user.click(screen.getByRole("button", { name: "Confirm specification" }));
   expect(acceptProductSpecification).toHaveBeenCalledWith(refinementRun);
   expect(screen.queryByRole("dialog", { name: "Confirm specification" })).not.toBeInTheDocument();
-  expect(screen.getByRole("status")).toHaveTextContent("Planning agent is generating the immutable plan.");
+  expect(screen.getByRole("status")).toHaveTextContent("Work Specification approved. The planning agent is generating the immutable plan.");
 });
 
 test("opens refinement after acceptance reports recorded findings", async () => {
@@ -599,7 +635,7 @@ test("does not present refinement controls after planning has advanced", async (
 
   await user.click(await screen.findByText("run-12345678"));
   await user.click(screen.getByRole("button", { name: "Focus Product specification" }));
-  expect(screen.getByText("This product specification is immutable because the run is no longer in refinement.")).toBeVisible();
+  expect(screen.getByText("This Work Specification is immutable because the run is no longer in refinement.")).toBeVisible();
   expect(screen.queryByRole("textbox", { name: "Editable product specification JSON" })).not.toBeInTheDocument();
 });
 
@@ -613,7 +649,7 @@ test("requires an authoritative positive revision before offering product specif
   await user.click(await screen.findByText("run-12345678"));
   await user.click(screen.getByRole("button", { name: "Focus Product specification" }));
 
-  expect(screen.getByText("The displayed product specification revision is unavailable. Refresh the run before editing or accepting it.")).toBeVisible();
+  expect(screen.getByText("The displayed Work Specification revision is unavailable. Refresh the run before editing or approving it.")).toBeVisible();
   expect(screen.queryByRole("textbox", { name: "Editable product specification JSON" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Select product specification" })).not.toBeInTheDocument();
 });

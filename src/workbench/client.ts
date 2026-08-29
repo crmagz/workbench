@@ -1,4 +1,4 @@
-export type Artifact = { kind: "source" | "product_specification" | "specification_evaluation" | "plan" | "implementation"; sha256: string };
+export type Artifact = { kind: "source" | "work_specification" | "product_specification" | "specification_evaluation" | "plan" | "implementation"; sha256: string };
 export type Project = { project_id: string };
 export type Approval = { decision_id: string; gate: "plan" | "implementation"; decision: string; artifact_sha256: string; actor_id: string; created_at: string; delivered: boolean };
 export type SpecificationEvaluationWaiver = { artifact_sha256: string; actor_id: string; rationale: string; created_at: string };
@@ -274,7 +274,7 @@ export const apiClient: ApiClient = {
     inFlightDecisionKeys.delete(fingerprint);
   },
   async generateProductSpecification(runId) {
-    await json(await fetch(`${base}/planning-runs/${encodeURIComponent(runId)}/generate-product-specification`, { method: "POST" }));
+    await json(await fetch(`${base}/planning-runs/${encodeURIComponent(runId)}/generate-work-specification`, { method: "POST" }));
   },
   async acceptProductSpecification(run) {
     const artifact = run.artifacts.find((item) => item.kind === "product_specification");
@@ -284,7 +284,7 @@ export const apiClient: ApiClient = {
     inFlightAcceptanceKeys.set(fingerprint, idempotencyKey);
     let response: Response;
     try {
-      response = await fetch(`${base}/planning-runs/${encodeURIComponent(run.run_id)}/accept-product-specification`, {
+      response = await fetch(`${base}/planning-runs/${encodeURIComponent(run.run_id)}/accept-work-specification`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
         body: JSON.stringify({ revision: run.product_specification_revision, artifact_sha256: artifact.sha256 })
@@ -322,7 +322,7 @@ export const apiClient: ApiClient = {
     inFlightCancellationKeys.delete(runId);
   },
   async evaluateProductSpecification(runId) {
-    await json(await fetch(`${base}/planning-runs/${encodeURIComponent(runId)}/evaluate-product-specification`, { method: "POST" }));
+    await json(await fetch(`${base}/planning-runs/${encodeURIComponent(runId)}/evaluate-work-specification`, { method: "POST" }));
   },
   async waiveSpecificationEvaluation(run, rationale) {
     const artifact = run.specification_evaluation_sha256
@@ -374,7 +374,7 @@ export const apiClient: ApiClient = {
     }
     let response: Response;
     try {
-      response = await fetch(`${base}/planning-runs/${encodeURIComponent(run.run_id)}/revise-product-specification`, {
+      response = await fetch(`${base}/planning-runs/${encodeURIComponent(run.run_id)}/revise-work-specification`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "Idempotency-Key": idempotencyKey },
         body
