@@ -80,11 +80,10 @@ test("renders a real Kind-backed scoped Workbench run", async ({ page }) => {
     await page.getByRole("button", { name: "Focus Work specification", exact: true }).click();
     await expect(page.getByRole("button", { name: "Focus Work specification", exact: true })).toHaveAttribute("aria-pressed", "true");
     await expect(page.getByLabel("Selected workflow phase")).toContainText("Work specification");
-    await expect(page.getByText("One Work Specification workspace: submitted intent, normalized requirements, and readiness evidence.")).toBeVisible();
+    await expect(page.getByText("One Work Specification is the review and approval contract. Derived evidence remains in the audit trail.")).toBeVisible();
     await expect(page.getByLabel("Work Specification YAML composition", { exact: true })).toBeVisible();
     await expect(page.getByLabel("Work Specification YAML composition", { exact: true })).toContainText('apiVersion: "cogito.dev/v1"');
-    await expect(page.locator(".specification-evidence-pane").filter({ hasText: "Normalized requirements" })).toBeVisible();
-    await expect(page.locator(".specification-evidence-pane").filter({ hasText: "Readiness evidence" })).toBeVisible();
+    await expect(page.locator(".specification-evidence-pane")).toHaveCount(1);
     await page.getByLabel("Work Specification format").getByRole("button", { name: "Canonical JSON", exact: true }).click();
     await expect(page.getByLabel("Work Specification canonical JSON", { exact: true })).toBeVisible();
   } finally {
@@ -120,9 +119,9 @@ test("reviews the single Work Specification workspace before planning", async ({
     await page.goto(`${origin}/workflows/${encodeURIComponent(readOnlyRunId)}`);
     await page.getByRole("button", { name: "Focus Work specification", exact: true }).click();
     await expect(page.getByRole("button", { name: "Focus Work specification", exact: true })).toHaveAttribute("aria-pressed", "true");
-    await expect(page.getByText("One Work Specification workspace: submitted intent, normalized requirements, and readiness evidence.")).toBeVisible();
+    await expect(page.getByText("One Work Specification is the review and approval contract. Derived evidence remains in the audit trail.")).toBeVisible();
     await expect(page.getByLabel("Work Specification YAML composition", { exact: true })).toBeVisible();
-    await expect(page.getByLabel("Product specification YAML composition", { exact: true })).toBeVisible();
+    await expect(page.locator(".specification-evidence-pane")).toHaveCount(1);
     await expect(page.getByRole("button", { name: "Accept" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Needs refinement" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Cancel" })).toBeVisible();

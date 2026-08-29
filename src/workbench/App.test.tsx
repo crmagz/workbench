@@ -276,10 +276,11 @@ test("renders the canonical lifecycle as one Work Specification workspace", asyn
   expect(screen.queryByRole("button", { name: "Focus Product specification" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Focus Specification evaluation" })).not.toBeInTheDocument();
   expect(screen.getAllByRole("button", { name: /^Focus / })).toHaveLength(5);
-  expect(screen.getByText("One Work Specification workspace: submitted intent, normalized requirements, and readiness evidence.")).toBeVisible();
-  expect(await screen.findByText("Submitted Work Specification", { exact: false })).toBeVisible();
-  expect(screen.getAllByText("Normalized requirements", { exact: false }).at(-1)).toBeVisible();
-  expect(screen.getAllByText("Readiness evidence", { exact: false }).at(-1)).toBeVisible();
+  expect(screen.getByText("One Work Specification is the review and approval contract. Derived evidence remains in the audit trail.")).toBeVisible();
+  expect(await screen.findByRole("heading", { name: "Work Specification", level: 4 })).toBeVisible();
+  expect(document.querySelectorAll(".specification-evidence-pane")).toHaveLength(1);
+  expect(screen.queryByRole("heading", { name: "Product specification", level: 4 })).not.toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "Specification evaluation", level: 4 })).not.toBeInTheDocument();
 });
 
 test("renders project-scoped agent operations without offering execution controls", async () => {
