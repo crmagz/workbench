@@ -2,10 +2,10 @@
 
 An evidence-first, project-scoped operator console for Cogito. It presents a
 filterable Runs inbox, deep-linkable run detail, an authoritative lifecycle
-timeline, and a centralized workflow-specification workspace. That single form
-combines the active phase, source and product-specification references and
-their immutable digests, editable product-specification JSON, permitted
-workflow decisions, and a durable audit log of workflow and agent activity.
+timeline, and a centralized workflow-specification workspace. The workspace
+shows the selected phase's single main immutable artifact and its digest,
+alongside permitted workflow decisions and a durable audit log of workflow and
+agent activity.
 
 The workspace displays the server-owned projection; it never advances a
 workflow locally or accesses object storage or Temporal. A specification edit

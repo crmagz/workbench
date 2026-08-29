@@ -11,10 +11,8 @@ The primary run-detail experience is a single workflow form rather than a
 duplicated selected-stage dossier. It combines:
 
 - the active phase and current operator instruction;
-- compact **Specification** and **Product specification** artifact selectors,
-  with their SHA-256 digests shown below;
-- an always-expanded, syntax-highlighted JSON editor for the current product
-  specification;
+- a single main immutable artifact panel for the selected lifecycle phase,
+  with its SHA-256 digest and a Schema YAML or Canonical JSON view;
 - the permitted gate controls: green **Approve**, blue **Needs refinement**,
   and red **Cancel**; and
 - a centralized audit log containing lifecycle decisions and agent phase

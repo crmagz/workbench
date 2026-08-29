@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, jest } from "@jest/globals";
 
@@ -21,6 +21,59 @@ function client(overrides: Partial<ApiClient> = {}): ApiClient {
 
 beforeEach(() => { window.history.replaceState({}, "", "/"); window.localStorage.clear(); });
 
+test("opens a run directly in the phase-driven control center and keeps visualization linkable", async () => {
+  const user = userEvent.setup();
+  render(<App client={client()} />);
+
+  await user.click(await screen.findByText(run.workflow_id!));
+  expect(window.location.pathname).toBe(`/runs/${run.run_id}`);
+  expect(window.location.search).toBe("?phase=plan_approval");
+  expect(await screen.findByRole("region", { name: "Workflow control center" })).toBeVisible();
+
+  await user.click(screen.getByRole("button", { name: "Focus Specification" }));
+  expect(window.location.search).toBe("?phase=specification");
+  expect(screen.getByText(/Inspection mode/)).toBeVisible();
+  expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
+
+  const visualize = screen.getByRole("button", { name: "Visualize workflow topology" });
+  await user.click(visualize);
+  expect(window.location.search).toBe("?phase=specification&visualize=1");
+  const visualization = screen.getByRole("dialog", { name: run.workflow_id! });
+  expect(visualization).toBeVisible();
+  expect(visualization.parentElement?.parentElement).toBe(document.body);
+  expect(document.body).toHaveClass("visualize-overlay-open");
+  fireEvent.keyDown(visualization, { key: "Escape" });
+  expect(screen.queryByRole("dialog", { name: run.workflow_id! })).not.toBeInTheDocument();
+  expect(document.body).not.toHaveClass("visualize-overlay-open");
+  await waitFor(() => expect(window.location.search).toBe("?phase=specification"));
+  expect(visualize).toHaveFocus();
+});
+
+test("closes a shared visualization link into its underlying control center", async () => {
+  window.history.replaceState({}, "", `/runs/${run.run_id}?phase=planning&visualize=1`);
+  const user = userEvent.setup();
+  render(<App client={client()} />);
+
+  expect(await screen.findByRole("dialog", { name: run.workflow_id! })).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "Close visualization" }));
+  expect(screen.queryByRole("dialog", { name: run.workflow_id! })).not.toBeInTheDocument();
+  expect(window.location.pathname).toBe(`/runs/${run.run_id}`);
+  expect(window.location.search).toBe("?phase=planning");
+  expect(screen.getByRole("region", { name: "Workflow control center" })).toBeVisible();
+});
+
+test("returns a direct control-center link to Mission Control", async () => {
+  window.history.replaceState({}, "", `/runs/${run.run_id}?phase=planning`);
+  const user = userEvent.setup();
+  render(<App client={client()} />);
+
+  await screen.findByRole("region", { name: "Workflow control center" });
+  const missionControl = screen.getAllByRole("button", { name: "Mission Control" }).at(-1)!;
+  await user.click(missionControl);
+  expect(window.location.pathname).toBe("/");
+  expect(await screen.findByRole("heading", { name: "Mission Control" })).toBeVisible();
+});
+
 test("expands authoritative audit activity with redacted correlated output", async () => {
   const user = userEvent.setup();
   const getAuditLogs = jest.fn<ApiClient["getAuditLogs"]>().mockResolvedValue({
@@ -31,7 +84,7 @@ test("expands authoritative audit activity with redacted correlated output", asy
   render(<App client={client({ getAuditLogs })} />);
 
   await user.click(await screen.findByRole("button", { name: "View logs →" }));
-  expect(await screen.findByLabelText("Redacted correlated log output")).toHaveTextContent("event-1 agent output");
+  expect(await screen.findByLabelText("Pod execution logs")).toHaveTextContent("event-1 agent output");
   expect(getAuditLogs).toHaveBeenCalledWith(run.run_id, events[0].event_id, undefined);
   expect(screen.getByRole("button", { name: "Hide logs" })).toHaveAttribute("aria-expanded", "true");
 });
@@ -63,7 +116,7 @@ test("deduplicates an inclusive pagination boundary in correlated output", async
   await user.click(await screen.findByRole("button", { name: "View logs →" }));
   await user.click(await screen.findByRole("button", { name: "Load earlier output" }));
 
-  const output = await screen.findByLabelText("Redacted correlated log output");
+  const output = await screen.findByLabelText("Pod execution logs");
   expect(output).toHaveTextContent("newer output");
   expect(output).toHaveTextContent("older output");
   expect(screen.getAllByText("newer output", { exact: true })).toHaveLength(1);
@@ -85,7 +138,7 @@ test("retries a failed continuation without discarding earlier correlated output
   await user.click(await screen.findByRole("button", { name: "Load earlier output" }));
   await user.click(await screen.findByRole("button", { name: "Retry" }));
 
-  const output = await screen.findByLabelText("Redacted correlated log output");
+  const output = await screen.findByLabelText("Pod execution logs");
   expect(output).toHaveTextContent("newer output");
   expect(output).toHaveTextContent("older output");
   expect(getAuditLogs).toHaveBeenNthCalledWith(1, run.run_id, events[0].event_id, undefined);
@@ -103,7 +156,7 @@ test("expands a phase's Audit activity with its correlated output", async () => 
   render(<App client={client({ getAuditLogs })} />);
 
   await user.click(await screen.findByRole("button", { name: "View logs →" }));
-  expect(await screen.findByLabelText("Redacted correlated log output")).toHaveTextContent("phase output");
+  expect(await screen.findByLabelText("Pod execution logs")).toHaveTextContent("phase output");
   expect(getAuditLogs).toHaveBeenCalledWith(run.run_id, events[0].event_id, undefined);
 });
 
@@ -118,7 +171,7 @@ test("expands Workflow Canvas audit activity with correlated output", async () =
   await user.click(await screen.findByText(run.run_id));
   await user.click(await screen.findByRole("button", { name: "View logs →" }));
 
-  expect(await screen.findByLabelText("Redacted correlated log output")).toHaveTextContent("workflow audit output");
+  expect(await screen.findByLabelText("Pod execution logs")).toHaveTextContent("workflow audit output");
   expect(getAuditLogs).toHaveBeenCalledWith(run.run_id, events[0].event_id, undefined);
 });
 
@@ -233,7 +286,7 @@ test("renders project-scoped agent operations without offering execution control
   await user.click(screen.getByRole("button", { name: "Customize catalog columns" }));
   expect(screen.getByRole("button", { name: "Move Owner column" })).toBeVisible();
   await user.click(screen.getByRole("button", { name: /Open workflow for developer running invocation/i }));
-  expect(window.location.pathname).toBe(`/workflows/${run.run_id}`);
+  expect(window.location.pathname).toBe(`/runs/${run.run_id}`);
   expect(await screen.findByRole("button", { name: "Focus Specification" })).toBeVisible();
 });
 
@@ -251,7 +304,7 @@ test("opens the originating workflow from an immutable agent invocation", async 
   await user.click(await screen.findByRole("button", { name: "Agents" }));
   await user.click(await screen.findByRole("button", { name: /Open workflow for developer running invocation/i }));
 
-  expect(window.location.pathname).toBe(`/workflows/${run.run_id}`);
+  expect(window.location.pathname).toBe(`/runs/${run.run_id}`);
   expect(await screen.findByRole("button", { name: "Focus Specification" })).toBeVisible();
 });
 
@@ -273,7 +326,7 @@ test("opening an agent invocation replaces a previously selected workflow", asyn
   await user.click(screen.getByRole("button", { name: "Agents" }));
   await user.click(await screen.findByRole("button", { name: /Open workflow for developer running invocation/i }));
 
-  expect(window.location.pathname).toBe(`/workflows/${secondRun.run_id}`);
+  expect(window.location.pathname).toBe(`/runs/${secondRun.run_id}`);
   expect(await screen.findByRole("heading", { name: secondRun.workflow_id! })).toBeVisible();
 });
 
@@ -401,7 +454,7 @@ test("keeps a legacy run usable while workflow graph fields are rolling out", as
   render(<App client={client({ listRuns: async () => ({ runs: [legacyRun], revision: "legacy", etag: "legacy", unchanged: false }), getRun: async () => legacyRun })} />);
 
   await user.click(await screen.findByText("run-12345678"));
-  expect(await screen.findByText("No authoritative lifecycle graph is available for this run yet.")).toBeVisible();
+  expect(await screen.findByRole("region", { name: "Workflow control center" })).toBeVisible();
 });
 
 test("combines authoritative audit activity and verified specifications in one workflow control center", async () => {
@@ -411,9 +464,9 @@ test("combines authoritative audit activity and verified specifications in one w
   await user.click(await screen.findByText("run-12345678"));
   expect(await screen.findByRole("region", { name: "Workflow control center" })).toBeVisible();
   expect(screen.getByRole("heading", { name: "Workflow audit activity" })).toBeVisible();
-  expect(screen.getByText(/Durable lifecycle, agent, and approval events/)).toBeVisible();
+  expect(screen.getByText(/Lifecycle and agent execution events/)).toBeVisible();
   expect(screen.queryByText("Execution log")).not.toBeInTheDocument();
-  expect(screen.getByRole("heading", { name: "Workflow specification workspace" })).toBeVisible();
+  expect(screen.getByRole("heading", { name: "Plan approval artifact" })).toBeVisible();
 });
 
 test("keeps the centralized audit log while phase context changes", async () => {
@@ -427,7 +480,7 @@ test("keeps the centralized audit log while phase context changes", async () => 
   expect(screen.getByRole("heading", { name: "Workflow audit activity" })).toBeVisible();
 });
 
-test("keeps active workflow decisions available while phase evidence changes", async () => {
+test("marks decisions as inspection-only while phase evidence changes", async () => {
   const user = userEvent.setup();
   render(<App client={client()} />);
 
@@ -435,12 +488,11 @@ test("keeps active workflow decisions available while phase evidence changes", a
   expect(screen.getByRole("button", { name: "Approve" })).toBeVisible();
   await user.click(screen.getByRole("button", { name: "Focus Specification" }));
   expect(screen.getByLabelText("Selected workflow phase")).toHaveTextContent("Specification");
-  expect(screen.getByRole("button", { name: "Approve" })).toBeVisible();
-  expect(screen.getByRole("button", { name: "Needs refinement" })).toBeVisible();
-  expect(screen.getByRole("button", { name: "Cancel" })).toBeVisible();
+  expect(screen.getByText(/Inspection mode/)).toBeVisible();
+  expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
 });
 
-test("keeps product-specification controls available while any workflow phase is selected", async () => {
+test("keeps product-specification controls scoped to the product specification phase", async () => {
   const user = userEvent.setup();
   const generateProductSpecification = jest.fn<ApiClient["generateProductSpecification"]>().mockResolvedValue(undefined);
   const refinementStages: Run["stages"] = [{ stage_id: "specification", label: "Specification", state: "completed", availability: "authoritative", reason: "Stored.", artifact_kind: "source" }, { stage_id: "product_specification", label: "Product specification", state: "in_progress", availability: "authoritative", reason: "No draft.", artifact_kind: null }];
@@ -448,8 +500,9 @@ test("keeps product-specification controls available while any workflow phase is
   render(<App client={client({ listRuns: async () => ({ runs: [refinementRun], revision: "refinement", etag: "refinement", unchanged: false }), getRun: async () => refinementRun, generateProductSpecification })} />);
 
   await user.click(await screen.findByText("run-12345678"));
-  expect(screen.getByRole("button", { name: "Proceed" })).toBeVisible();
-  await user.click(screen.getByRole("button", { name: "Focus Product specification" }));
+  await user.click(screen.getByRole("button", { name: "Focus Specification" }));
+  expect(screen.queryByRole("button", { name: "Proceed" })).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: /Focus product specification/i }));
   expect(screen.getByRole("button", { name: "Proceed" })).toBeVisible();
   await user.click(screen.getByRole("button", { name: "Proceed" }));
 
@@ -466,9 +519,8 @@ test("confirms acceptance or continues editing a product specification", async (
   render(<App client={client({ listRuns: async () => ({ runs: [refinementRun], revision: "refinement", etag: "refinement", unchanged: false }), getRun: async () => refinementRun, getEvidence: async () => ({ content: '{"title":"draft"}', sha256: specificationDigest }), reviseProductSpecification, acceptProductSpecification })} />);
 
   await user.click(await screen.findByText("run-12345678"));
-  await user.click(screen.getByRole("button", { name: "Focus Product specification" }));
-  expect(await screen.findByLabelText("Specification YAML composition")).toHaveTextContent('title: "draft"');
-  expect(screen.getByLabelText("Product specification YAML composition")).toHaveTextContent('title: "draft"');
+  await user.click(screen.getByRole("button", { name: /Focus product specification/i }));
+  expect(await screen.findByLabelText("Product specification YAML composition")).toHaveTextContent('title: "draft"');
   expect(screen.queryByRole("button", { name: "Evaluate product specification" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Select product specification" })).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Cancel" })).toBeVisible();
@@ -505,7 +557,7 @@ test("opens refinement after acceptance reports recorded findings", async () => 
   expect(screen.getByRole("status")).toHaveTextContent("Specification needs refinement.");
 });
 
-test("keeps cancellation available after a product specification is selected", async () => {
+test("keeps cancellation in the authoritative phase rather than product-spec inspection", async () => {
   const user = userEvent.setup();
   const specificationDigest = "c".repeat(64);
   const selectedStages: Run["stages"] = [{ stage_id: "product_specification", label: "Product specification", state: "completed", availability: "authoritative", reason: "Selected.", artifact_kind: "product_specification" }, { stage_id: "planning", label: "Planning", state: "queued", availability: "authoritative", reason: "Awaiting planner pickup.", artifact_kind: null }];
@@ -514,7 +566,8 @@ test("keeps cancellation available after a product specification is selected", a
 
   await user.click(await screen.findByText("run-12345678"));
   await user.click(screen.getByRole("button", { name: "Focus Product specification" }));
-  expect(screen.getByRole("button", { name: "Cancel" })).toBeVisible();
+  expect(screen.getByText(/Inspection mode/)).toBeVisible();
+  expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
 });
 
 test("keeps an invalid server-rejected revision in the editor for correction", async () => {
@@ -576,29 +629,39 @@ test("shows selected phase facts in the consolidated workflow control center", a
   expect(phase).toHaveTextContent("authoritative");
 });
 
-test("keeps plan evidence out of the workflow specification workspace", async () => {
+test("renders the structured plan artifact for plan phases", async () => {
   const user = userEvent.setup();
   render(<App client={client()} />);
 
   await user.click(await screen.findByText("run-12345678"));
 
-  expect(await screen.findByLabelText("Specification YAML composition")).toBeVisible();
-  expect(screen.queryByLabelText("plan contents")).not.toBeInTheDocument();
+  expect(await screen.findByLabelText("Plan YAML composition")).toBeVisible();
+  expect(screen.queryByLabelText("Specification YAML composition")).not.toBeInTheDocument();
 });
 
-test("displays submitted and product specifications together", async () => {
+test("renders an empty verified artifact instead of leaving its panel loading", async () => {
+  const user = userEvent.setup();
+  render(<App client={client({ getEvidence: async () => ({ content: "", sha256: digest }) })} />);
+
+  await user.click(await screen.findByText("run-12345678"));
+  expect(await screen.findByLabelText("Plan canonical JSON")).toBeVisible();
+  expect(screen.queryByRole("status", { name: /loading verified artifact/i })).not.toBeInTheDocument();
+});
+
+test("shows only the product specification in its selected phase panel", async () => {
   const user = userEvent.setup();
   const specificationDigest = "c".repeat(64);
   const refinedRun: Run = { ...run, artifacts: [{ kind: "source", sha256: digest }, { kind: "product_specification", sha256: specificationDigest }, { kind: "plan", sha256: digest }] };
   render(<App client={client({ listRuns: async () => ({ runs: [refinedRun], revision: "refined", etag: "refined", unchanged: false }), getRun: async () => refinedRun })} />);
 
   await user.click(await screen.findByText("run-12345678"));
-  expect(await screen.findByLabelText("Specification YAML composition")).toBeVisible();
-  expect(screen.getByLabelText("Product specification YAML composition")).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "Focus Product specification" }));
+  expect(await screen.findByLabelText("Product specification YAML composition")).toBeVisible();
+  expect(screen.queryByLabelText("Specification YAML composition")).not.toBeInTheDocument();
   expect(screen.getAllByText(specificationDigest).length).toBeGreaterThan(0);
 });
 
-test("renders the complete specification bodies in the workflow workspace", async () => {
+test("uses the product specification as the evaluation phase artifact", async () => {
   const user = userEvent.setup();
   const specificationDigest = "c".repeat(64);
   const refinedRun: Run = {
@@ -608,8 +671,9 @@ test("renders the complete specification bodies in the workflow workspace", asyn
   render(<App client={client({ listRuns: async () => ({ runs: [refinedRun], revision: "refined", etag: "refined", unchanged: false }), getRun: async () => refinedRun })} />);
 
   await user.click(await screen.findByText("run-12345678"));
-  expect(await screen.findByLabelText("Specification YAML composition")).toHaveTextContent("verified");
+  await user.click(screen.getByRole("button", { name: "Focus Specification evaluation" }));
   expect(screen.getByLabelText("Product specification YAML composition")).toHaveTextContent("verified");
+  expect(screen.queryByLabelText("Specification YAML composition")).not.toBeInTheDocument();
 });
 
 test("renders schema YAML by default and preserves canonical JSON inspection", async () => {
@@ -617,6 +681,7 @@ test("renders schema YAML by default and preserves canonical JSON inspection", a
   render(<App client={client()} />);
 
   await user.click(await screen.findByText("run-12345678"));
+  await user.click(screen.getByRole("button", { name: "Focus Specification" }));
   expect(await screen.findByLabelText("Specification YAML composition")).toHaveTextContent('apiVersion: "cogito.dev/v1"');
   expect(screen.getByLabelText("Specification YAML composition")).toHaveTextContent('kind: "SubmittedSpecification"');
   expect(screen.getByLabelText("Specification YAML composition").querySelector(".yaml-key")).toHaveTextContent("apiVersion");
@@ -676,29 +741,41 @@ test("restores a cached timeline when a previously viewed run is not modified", 
   expect(screen.queryByText("plan.second event")).not.toBeInTheDocument();
 });
 
-test("keeps the single workflow control center embedded in a deep-linkable Workflow Canvas", async () => {
+test("keeps the single workflow control center on a deep-linkable run route", async () => {
   const user = userEvent.setup();
   render(<App client={client()} />);
   await user.click(await screen.findByText("run-12345678"));
 
   expect(await screen.findByRole("heading", { name: "planning-run-42-revision-1" })).toBeVisible();
-  expect(window.location.pathname).toBe("/workflows/run-12345678");
+  expect(window.location.pathname).toBe("/runs/run-12345678");
   expect(screen.getByRole("heading", { name: "Workflow control center" })).toBeVisible();
   expect(screen.getByRole("button", { name: "Focus Planning" })).toBeVisible();
-  expect(window.location.pathname).toBe("/workflows/run-12345678");
+  expect(window.location.pathname).toBe("/runs/run-12345678");
 });
 
-test("replaces the lifecycle bar with an interactive compact authoritative topology", async () => {
+test("opens an interactive computed topology overlay", async () => {
   const user = userEvent.setup();
   render(<App client={client()} />);
   await user.click(await screen.findByText("run-12345678"));
 
   await user.click(await screen.findByRole("button", { name: "Visualize workflow topology" }));
-  expect(screen.getByText("Workflow topology")).toBeVisible();
-  await user.click(screen.getByRole("button", { name: "Select Implementation" }));
+  expect(screen.getByRole("dialog", { name: run.workflow_id! })).toBeVisible();
+  await user.click(await screen.findByRole("button", { name: "Select Implementation" }));
   expect(screen.getByLabelText("Selected workflow phase")).toHaveTextContent("Implementation");
-  await user.click(screen.getByRole("button", { name: "Lifecycle" }));
   expect(screen.getByText("Lifecycle")).toBeVisible();
+});
+
+test("closes the visualization when an arbitrary workflow node is selected", async () => {
+  const user = userEvent.setup();
+  const securityNode = { stage_id: "security_scan", label: "Security scan", state: "queued" as const, availability: "authoritative" as const, reason: "Awaiting scan.", artifact_kind: null, node_type: "agent" as const };
+  const graphRun: Run = { ...run, workflow_graph: { nodes: [...run.workflow_graph!.nodes, securityNode], edges: [...run.workflow_graph!.edges, { source_node_id: "plan_approval", target_node_id: securityNode.stage_id, style: "dashed", emphasis: "secondary" }] } };
+  render(<App client={client({ listRuns: async () => ({ runs: [graphRun], revision: "graph", etag: "graph", unchanged: false }), getRun: async () => graphRun })} />);
+
+  await user.click(await screen.findByText("run-12345678"));
+  await user.click(screen.getByRole("button", { name: "Visualize workflow topology" }));
+  await user.click(screen.getByRole("button", { name: "Select Security scan" }));
+  expect(screen.queryByRole("dialog", { name: run.workflow_id! })).not.toBeInTheDocument();
+  expect(screen.getByRole("region", { name: "Workflow control center" })).toBeVisible();
 });
 
 test("uses the authoritative graph nodes for the lifecycle rail and focuses the selected section", async () => {

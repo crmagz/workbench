@@ -32,7 +32,7 @@ function send(response, code, body, headers = {}) {
   response.end(body ? JSON.stringify(body) : "");
 }
 
-test("operator decision refreshes a browser-rendered authoritative Workflow Canvas and Dossier", async ({ page }) => {
+test("operator decision refreshes a browser-rendered workflow control center", async ({ page }) => {
   let approved = false;
   const actions = [];
   const feedback = [];
@@ -142,7 +142,7 @@ test("operator decision refreshes a browser-rendered authoritative Workflow Canv
     await expect(page.getByRole("heading", { name: "planning-run-browser-e2e-revision-1" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Focus Plan approval" })).toHaveAttribute("aria-pressed", "true");
     await expect(page.getByLabel("Selected workflow phase")).toContainText("Plan approval");
-    await expect(page).toHaveURL(/\/workflows\/run-browser-e2e$/);
+    await expect(page).toHaveURL(/\/runs\/run-browser-e2e\?phase=plan_approval$/);
     await page.reload();
     await expect(page.getByRole("button", { name: "Focus Plan approval" })).toBeVisible();
     await page.getByRole("button", { name: "Focus Implementation", exact: true }).click();
