@@ -29,17 +29,17 @@ test("forwards only allowlisted Workbench requests with the server-side credenti
   const timeline = await fetch(`${origin}/api/cogito/api/v1/workbench/runs/run-123/timeline`);
   const auditLogs = await fetch(`${origin}/api/cogito/api/v1/workbench/runs/run-123/timeline/event-456/logs?cursor=opaque-cursor`);
   const feedback = await fetch(`${origin}/api/cogito/api/v1/workbench/runs/run-123/feedback`);
-  const revise = await fetch(`${origin}/api/cogito/api/v1/planning-runs/run-123/revise-product-specification`, {
+  const revise = await fetch(`${origin}/api/cogito/api/v1/planning-runs/run-123/revise-work-specification`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ specification: { text: "x".repeat(17 * 1024) } })
   });
-  const accept = await fetch(`${origin}/api/cogito/api/v1/planning-runs/run-123/accept-product-specification`, {
+  const accept = await fetch(`${origin}/api/cogito/api/v1/planning-runs/run-123/accept-work-specification`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "Idempotency-Key": "accept-1" },
     body: JSON.stringify({ expected_product_specification_revision: 1, artifact_sha256: "a".repeat(64) })
   });
-  const productSpecification = await fetch(`${origin}/api/cogito/api/v1/workbench/runs/run-123/evidence/product_specification?artifact_sha256=${"a".repeat(64)}`);
+  const workSpecification = await fetch(`${origin}/api/cogito/api/v1/workbench/runs/run-123/evidence/work_specification?artifact_sha256=${"a".repeat(64)}`);
   const denied = await fetch(`${origin}/api/cogito/api/v1/runs`);
   const crossOrigin = await fetch(`${origin}/api/cogito//attacker.example/api/v1/workbench/runs`);
   await new Promise<void>((resolve, reject) => server.close((error?: Error) => error ? reject(error) : resolve()));
@@ -50,16 +50,16 @@ test("forwards only allowlisted Workbench requests with the server-side credenti
   expect(timeline.status).toBe(200);
   expect(auditLogs.status).toBe(200);
   expect(feedback.status).toBe(200);
-  expect(productSpecification.status).toBe(200);
+  expect(workSpecification.status).toBe(200);
   expect(revise.status).toBe(200);
   expect(accept.status).toBe(200);
   expect(upstream).toHaveBeenCalledTimes(7);
   expect(upstream).toHaveBeenCalledWith(
-    new URL("https://api.example.test/api/v1/planning-runs/run-123/accept-product-specification"),
+    new URL("https://api.example.test/api/v1/planning-runs/run-123/accept-work-specification"),
     expect.objectContaining({ headers: expect.objectContaining({ "idempotency-key": "accept-1" }) })
   );
   expect(upstream).toHaveBeenCalledWith(
-    new URL("https://api.example.test/api/v1/planning-runs/run-123/revise-product-specification"),
+    new URL("https://api.example.test/api/v1/planning-runs/run-123/revise-work-specification"),
     expect.objectContaining({ body: expect.stringContaining("x".repeat(17 * 1024)) })
   );
   expect(upstream).toHaveBeenCalledWith(
