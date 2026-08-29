@@ -52,9 +52,10 @@ function sourceContract(value: { [key: string]: JsonValue }) {
  * The underlying artifact is never transformed or re-submitted from this representation.
  */
 export function renderSchemaYaml(content: string, artifact: Pick<Artifact, "kind" | "sha256">, revision?: number | null) {
-  if (artifact.kind !== "source" && artifact.kind !== "product_specification") return null;
   try {
     const parsed: unknown = JSON.parse(content);
+    if (!isRecord(parsed) && !Array.isArray(parsed)) return null;
+    if (artifact.kind === "plan") return yamlLines(parsed).join("\n");
     if (!isRecord(parsed)) return null;
     const contract = artifact.kind === "source" ? sourceContract(parsed) : parsed;
     const { schema_version: schemaVersion, ...specification } = contract;
