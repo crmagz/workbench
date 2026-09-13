@@ -442,11 +442,11 @@ body.visualize-overlay-open { overflow:hidden; overscroll-behavior:none; }
 .visualize-dialog .control-note { flex:none; margin:12px 0; }
 .visualize-dialog .relay-grid-scroll { min-height:0; flex:1; border-radius:12px; }
 
-/* Audit is deliberately a five-column operator table: no event IDs or retry counts. */
-.audit-timeline .timeline { grid-template-columns:var(--audit-status-column,132px) 72px minmax(180px,1fr) 106px auto; }
+/* Audit keeps the explicit log action visible; role precedes the activity summary for fast scanning. */
+.audit-timeline .timeline { grid-template-columns:var(--audit-status-column,132px) 72px minmax(130px,.8fr) minmax(180px,1fr) 106px auto; }
 .audit-event-occurred { display:grid; }
 .audit-log-line { display:block; padding:8px 11px; white-space:pre-wrap; overflow-wrap:anywhere; }
 .log-timestamp { color:var(--fg-muted); }.log-reference { color:var(--accent); }.log-url { color:var(--ok); }.log-hex { color:var(--warn); }
 .specification-format-tabs button[aria-pressed="true"] { color:#00d4ff; background:rgba(0,212,255,.15); }
-@media (max-width:1100px) { .audit-timeline .timeline { grid-template-columns:var(--audit-status-column,132px) 64px minmax(160px,1fr) auto; }.audit-column-headings span:nth-child(4),.audit-event-occurred { display:none; } }
+@media (max-width:1100px) { .audit-timeline .timeline { grid-template-columns:var(--audit-status-column,132px) 64px minmax(120px,.75fr) minmax(160px,1fr) auto; }.audit-column-headings span:nth-child(5),.audit-event-occurred { display:none; } }
 @media (max-width:700px) { .audit-event-row { grid-template-columns:max-content max-content minmax(0,1fr) max-content; }.audit-event-primary { grid-column:3; }.audit-event-row .audit-expand,.audit-evidence-unavailable { grid-column:4; grid-row:1; } .visualize-dialog > header { padding:14px 16px; }.visualize-canvas-body { padding:0 16px 16px; } }
