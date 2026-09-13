@@ -330,7 +330,7 @@ test("shows a persisted terminal failure reason in workflow audit activity", asy
   expect(screen.getByRole("heading", { name: "Workflow audit activity" })).toBeVisible();
 });
 
-test("keeps the completed evaluation in focus after specification acceptance", async () => {
+test("moves lifecycle focus to planning immediately after specification acceptance", async () => {
   const acceptedStages: Run["stages"] = [
     { stage_id: "specification", label: "Specification", state: "completed", availability: "authoritative", reason: "Recorded.", artifact_kind: "source" },
     { stage_id: "product_specification", label: "Product specification", state: "completed", availability: "authoritative", reason: "Accepted.", artifact_kind: "product_specification" },
@@ -348,7 +348,8 @@ test("keeps the completed evaluation in focus after specification acceptance", a
   render(<App client={client({ listRuns: async () => ({ runs: [acceptedRun], revision: "runs", etag: "runs", unchanged: false }), getRun: async () => acceptedRun })} />);
 
   await user.click(await screen.findByText(acceptedRun.workflow_id!));
-  expect(await screen.findByRole("heading", { name: "Specification evaluation" })).toBeVisible();
+  expect(await screen.findByRole("heading", { name: "Planning" })).toBeVisible();
+  expect(screen.getByRole("button", { name: "Focus Planning" })).toHaveAttribute("aria-pressed", "true");
 });
 
 test("renders the canonical lifecycle as one Work Specification workspace", async () => {
@@ -381,9 +382,8 @@ test("renders the canonical lifecycle as one Work Specification workspace", asyn
   expect(screen.queryByRole("button", { name: "Focus Product specification" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Focus Specification evaluation" })).not.toBeInTheDocument();
   expect(screen.getAllByRole("button", { name: /^Focus / })).toHaveLength(5);
-  expect(screen.getByText("One Work Specification is the review and approval contract. Derived evidence remains in the audit trail.")).toBeVisible();
-  expect(await screen.findByRole("heading", { name: "Work Specification", level: 4 })).toBeVisible();
-  expect(document.querySelectorAll(".specification-evidence-pane")).toHaveLength(1);
+  expect(await screen.findByRole("heading", { name: "Planning" })).toBeVisible();
+  expect(screen.getByRole("button", { name: "Focus Planning" })).toHaveAttribute("aria-pressed", "true");
   expect(screen.queryByRole("heading", { name: "Product specification", level: 4 })).not.toBeInTheDocument();
   expect(screen.queryByRole("heading", { name: "Specification evaluation", level: 4 })).not.toBeInTheDocument();
 });
