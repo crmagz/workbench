@@ -47,6 +47,16 @@ function sourceContract(value: { [key: string]: JsonValue }) {
   }
 }
 
+function submittedWorkSpecification(value: { [key: string]: JsonValue }) {
+  const contract = sourceContract(value);
+  return isRecord(contract.work_specification) ? contract.work_specification : contract;
+}
+
+function submittedWorkflowContext(value: { [key: string]: JsonValue }) {
+  const contract = sourceContract(value);
+  return isRecord(contract.workflow_context) ? contract.workflow_context : null;
+}
+
 /**
  * Produces a stable, read-only schema envelope for an authoritative JSON artifact.
  * The underlying artifact is never transformed or re-submitted from this representation.
@@ -57,10 +67,19 @@ export function renderSchemaYaml(content: string, artifact: Pick<Artifact, "kind
     if (!isRecord(parsed) && !Array.isArray(parsed)) return null;
     if (artifact.kind === "plan") return yamlLines(parsed).join("\n");
     if (!isRecord(parsed)) return null;
-    const contract = artifact.kind === "source" ? sourceContract(parsed) : parsed;
+    const contract = artifact.kind === "source"
+      ? sourceContract(parsed)
+      : artifact.kind === "work_specification"
+        ? submittedWorkSpecification(parsed)
+        : parsed;
     const { schema_version: schemaVersion, ...specification } = contract;
     const metadata: { [key: string]: JsonValue } = { artifactSha256: artifact.sha256 };
     if (schemaVersion !== undefined) metadata.schemaVersion = schemaVersion;
+    if (artifact.kind === "work_specification") {
+      const workflowContext = submittedWorkflowContext(parsed);
+      if (typeof workflowContext?.template_ref === "string") metadata.workflowTemplateRef = workflowContext.template_ref;
+      if (typeof workflowContext?.policy_ref === "string") metadata.workflowPolicyRef = workflowContext.policy_ref;
+    }
     if ((artifact.kind === "product_specification" || artifact.kind === "work_specification") && revision !== null && revision !== undefined) metadata.revision = revision;
     const composition: JsonValue = {
       apiVersion: "cogito.dev/v1",

@@ -24,6 +24,32 @@ describe("renderSchemaYaml", () => {
     expect(rendered).toContain("  revision: 3");
   });
 
+  test("projects the submitted Work Specification without exposing its internal intake envelope", () => {
+    const contract = JSON.stringify({
+      schema_version: "cogito.initial-specification/v1",
+      constraints: { max_cost_usd: 50 },
+      work_specification: {
+        schema_version: 2,
+        title: "Validate Work Specification",
+        user_story: "As a product manager, I need one readable contract.",
+        outcome: "The contract is reviewable.",
+        acceptance_criteria: ["The Work Specification is displayed directly."],
+        technical_context: [],
+        repository_candidates: []
+      },
+      workflow_context: { template_ref: "software_delivery@1.0.0", policy_ref: "platform_standard@1.0.0" }
+    });
+    const rendered = renderSchemaYaml(JSON.stringify({ initial_specification: contract }), { kind: "work_specification", sha256: "f".repeat(64) }, 0);
+
+    expect(rendered).toContain('kind: "WorkSpecification"');
+    expect(rendered).toContain('workflowTemplateRef: "software_delivery@1.0.0"');
+    expect(rendered).toContain('workflowPolicyRef: "platform_standard@1.0.0"');
+    expect(rendered).toContain('  title: "Validate Work Specification"');
+    expect(rendered).not.toContain("initial_specification:");
+    expect(rendered).not.toContain("work_specification:");
+    expect(rendered).not.toContain("constraints:");
+  });
+
   test("unwraps the persisted source-artifact envelope for the YAML composition", () => {
     const contract = JSON.stringify({ schema_version: "cogito.initial-specification/v1", goal: "Scaffold a uv project", repositories: [{ ref: "https://github.com/crmagz/cogito-kind-e2e-fixture.git#abc" }] });
     const rendered = renderSchemaYaml(JSON.stringify({ initial_specification: contract }), { kind: "source", sha256: "d".repeat(64) });
