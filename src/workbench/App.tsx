@@ -651,11 +651,6 @@ function WorkflowMap({ run, timeline, onEvidence }: { run: Run; timeline: Timeli
 }
 
 function preferredWorkflowNodeId(nodes: PositionedWorkflowNode[], activeGate: Run["active_gate"]) {
-  const planning = nodes.find((node) => node.id === "planning");
-  const workSpecification = nodes.find((node) => node.id === "work_specification");
-  const legacyEvaluation = nodes.find((node) => node.id === "specification_evaluation");
-  if ((planning?.status === "awaiting_operator" || planning?.status === "queued") && workSpecification?.status === "completed") return workSpecification.id;
-  if ((planning?.status === "awaiting_operator" || planning?.status === "queued") && legacyEvaluation?.status === "completed") return legacyEvaluation.id;
   return nodes.find((node) => node.id === `${activeGate}_approval`)?.id
     ?? nodes.find((node) => node.status === "in_progress")?.id
     ?? nodes.find((node) => node.status === "queued")?.id
