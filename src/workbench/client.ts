@@ -2,6 +2,7 @@ export type Artifact = { kind: "source" | "work_specification" | "product_specif
 export type Project = { project_id: string };
 export type Approval = { decision_id: string; gate: "plan" | "implementation"; decision: string; artifact_sha256: string; actor_id: string; created_at: string; delivered: boolean };
 export type SpecificationEvaluationWaiver = { artifact_sha256: string; actor_id: string; rationale: string; created_at: string };
+export type OperatorFeedback = { feedback_id: string; source_gate: "plan" | "implementation"; comment: string; actor_id: string; created_at: string };
 export type Budget = { max_cost_usd: number; max_wall_clock_minutes: number; max_review_rounds: number; actual_cost_usd: number | null; turns_used: number | null };
 export type Execution = { phase_count: number; succeeded_phase_count: number; failed_phase_count: number; verification_passed: number; verification_failed: number; review_status: string | null; validation_status: string | null };
 export type ExternalLink = { kind: string; label: string; url: string };
@@ -44,6 +45,7 @@ export type AuditLogResponse = {
   availability: "available" | "disabled" | "unavailable" | "not_available";
   lines: AuditLogLine[];
   next_cursor: string | null;
+  tail_cursor?: string | null;
 };
 export type Feedback = { feedback_id: string; run_id: string; intent: "note"; artifact_sha256: string; stage_id: string; actor_id: string; comment: string; created_at: string };
 export type Stage = {
@@ -58,7 +60,7 @@ export type WorkflowGraphNode = Stage & { node_type: "agent" | "gate" | "queue" 
 export type WorkflowGraphEdge = { source_node_id: string; target_node_id: string; style: "solid" | "dashed"; emphasis: "primary" | "secondary" };
 export type WorkflowGraph = { nodes: WorkflowGraphNode[]; edges: WorkflowGraphEdge[] };
 export type WorkflowAction = {
-  action_id: "generate_product_specification" | "accept_product_specification" | "refine_product_specification" | "generate_plan" | "cancel_planning_run";
+  action_id: "generate_product_specification" | "accept_product_specification" | "refine_product_specification" | "generate_plan" | "cancel_planning_run" | "redrive_implementation";
   stage_id: string;
   label: string;
   description: string;
@@ -76,6 +78,7 @@ export type Run = {
   specification_evaluation_readiness?: "ready" | "needs_revision" | "waived" | null;
   specification_evaluation_sha256?: string | null;
   selected_specification_evaluation_sha256?: string | null;
+  operator_feedback?: OperatorFeedback | null;
   specification_evaluation_waiver?: SpecificationEvaluationWaiver | null;
   available_actions?: WorkflowAction[];
   stages?: Stage[];
@@ -134,7 +137,7 @@ export type ApiClient = {
   listRuns: (options?: { projectId?: string; etag?: string; signal?: AbortSignal }) => Promise<{ runs: Run[]; revision: string; etag: string | null; unchanged: boolean }>;
   getRun: (runId: string, signal?: AbortSignal) => Promise<Run>;
   getTimeline: (runId: string, options?: { etag?: string; signal?: AbortSignal }) => Promise<{ events: TimelineEvent[]; revision: string; etag: string | null; unchanged: boolean }>;
-  getAuditLogs: (runId: string, eventId: string, cursor?: string) => Promise<AuditLogResponse>;
+  getAuditLogs: (runId: string, eventId: string, cursor?: string, tailAfter?: string) => Promise<AuditLogResponse>;
   getEvidence: (runId: string, artifact: Artifact) => Promise<{ content: string; sha256: string }>;
   getFeedback: (runId: string) => Promise<Feedback[]>;
   recordFeedback: (run: Run, artifact: Artifact, stageId: string, comment: string) => Promise<Feedback>;
@@ -142,6 +145,7 @@ export type ApiClient = {
   generateProductSpecification: (runId: string) => Promise<void>;
   acceptProductSpecification: (run: Run) => Promise<ProductSpecificationAcceptance>;
   cancelPlanningRun: (runId: string) => Promise<void>;
+  redriveImplementation: (runId: string) => Promise<void>;
   evaluateProductSpecification: (runId: string) => Promise<void>;
   waiveSpecificationEvaluation: (run: Run, rationale: string) => Promise<void>;
   generatePlan: (runId: string) => Promise<void>;
@@ -165,8 +169,27 @@ const inFlightCancellationKeys = new Map<string, string>();
 // but become unreadable in the Workbench.
 const MAX_REFINEMENT_REQUEST_BYTES = 96 * 1024;
 
+async function authoritativeRequestError(response: Response): Promise<Error> {
+  let detail: string | null = null;
+  try {
+    const body: unknown = await response.json();
+    if (typeof body === "object" && body !== null && "detail" in body && typeof body.detail === "string") {
+      detail = body.detail;
+    }
+  } catch {
+    // The HTTP status remains authoritative when an intermediary removes the error body.
+  }
+  const summary = `Authoritative API request failed (${response.status})`;
+  if (response.status === 409) {
+    return new Error(
+      `${summary}: ${detail ?? "The action may already be recorded or the displayed workflow revision changed."} Refresh the workflow before submitting another decision.`
+    );
+  }
+  return new Error(detail ? `${summary}: ${detail}` : summary);
+}
+
 async function json(response: Response) {
-  if (!response.ok) throw new Error(`Authoritative API request failed (${response.status})`);
+  if (!response.ok) throw await authoritativeRequestError(response);
   return response.json();
 }
 
@@ -214,8 +237,11 @@ export const apiClient: ApiClient = {
     const body = await json(response);
     return { events: body.items, revision: body.revision, etag: response.headers.get("etag"), unchanged: false };
   },
-  async getAuditLogs(runId, eventId, cursor) {
-    const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : "";
+  async getAuditLogs(runId, eventId, cursor, tailAfter) {
+    const parameters = new URLSearchParams();
+    if (cursor) parameters.set("cursor", cursor);
+    if (tailAfter) parameters.set("tail_after", tailAfter);
+    const query = parameters.size ? `?${parameters.toString()}` : "";
     return json(await fetch(`${base}/workbench/runs/${encodeURIComponent(runId)}/timeline/${encodeURIComponent(eventId)}/logs${query}`));
   },
   async getEvidence(runId, artifact) {
@@ -238,7 +264,7 @@ export const apiClient: ApiClient = {
     });
     if (!response.ok) {
       inFlightFeedbackKeys.delete(fingerprint);
-      throw new Error(`Authoritative API request failed (${response.status})`);
+      throw await authoritativeRequestError(response);
     }
     const feedback = await json(response);
     // A transport/body failure before this point is ambiguous, so the key remains available for safe replay.
@@ -266,7 +292,7 @@ export const apiClient: ApiClient = {
     });
     if (!response.ok) {
       if (response.status >= 400 && response.status < 500 && response.status !== 408) inFlightDecisionKeys.delete(fingerprint);
-      throw new Error(`Authoritative API request failed (${response.status})`);
+      throw await authoritativeRequestError(response);
     }
     try { await response.json(); }
     catch { throw new Error("Authoritative API response could not be read; retry safely."); }
@@ -292,7 +318,7 @@ export const apiClient: ApiClient = {
     } catch { throw new Error("Authoritative API request was interrupted before a response."); }
     if (!response.ok) {
       if (response.status >= 400 && response.status < 500 && response.status !== 408) inFlightAcceptanceKeys.delete(fingerprint);
-      throw new Error(`Authoritative API request failed (${response.status})`);
+      throw await authoritativeRequestError(response);
     }
     let body: ProductSpecificationAcceptance;
     try { body = await response.json() as ProductSpecificationAcceptance; }
@@ -315,11 +341,14 @@ export const apiClient: ApiClient = {
     } catch { throw new Error("Authoritative API request was interrupted before a response."); }
     if (!response.ok) {
       if (response.status >= 400 && response.status < 500 && response.status !== 408) inFlightCancellationKeys.delete(runId);
-      throw new Error(`Authoritative API request failed (${response.status})`);
+      throw await authoritativeRequestError(response);
     }
     try { await response.json(); }
     catch { throw new Error("Authoritative API response could not be read; retry safely."); }
     inFlightCancellationKeys.delete(runId);
+  },
+  async redriveImplementation(runId) {
+    await json(await fetch(`${base}/planning-runs/${encodeURIComponent(runId)}/redrive-implementation`, { method: "POST" }));
   },
   async evaluateProductSpecification(runId) {
     await json(await fetch(`${base}/planning-runs/${encodeURIComponent(runId)}/evaluate-work-specification`, { method: "POST" }));
@@ -340,7 +369,7 @@ export const apiClient: ApiClient = {
     });
     if (!response.ok) {
       if (response.status >= 400 && response.status < 500 && response.status !== 408) inFlightWaiverKeys.delete(fingerprint);
-      throw new Error(`Authoritative API request failed (${response.status})`);
+      throw await authoritativeRequestError(response);
     }
     try { await response.json(); }
     catch { throw new Error("Authoritative API response could not be read; retry safely."); }
@@ -386,7 +415,7 @@ export const apiClient: ApiClient = {
       if (response.status >= 400 && response.status < 500 && response.status !== 408) {
         inFlightRevisionKeys.delete(fingerprint);
       }
-      throw new Error(`Authoritative API request failed (${response.status})`);
+      throw await authoritativeRequestError(response);
     }
     try { await response.json(); }
     catch { throw new Error("Authoritative API response could not be read; retry safely."); }

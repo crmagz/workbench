@@ -31,6 +31,17 @@ test("reads audit output through the fixed run and event route", async () => {
   );
 });
 
+test("requests only newer correlated output when tailing an audit event", async () => {
+  const fetchMock = jest.fn(async () => ({ ok: true, json: async () => ({ availability: "available", lines: [], next_cursor: null, tail_cursor: "ns:2" }) } as Response));
+  global.fetch = fetchMock as unknown as typeof fetch;
+
+  await apiClient.getAuditLogs("run-123", "event-456", undefined, "ns:1");
+
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/api/cogito/api/v1/workbench/runs/run-123/timeline/event-456/logs?tail_after=ns%3A1"
+  );
+});
+
 test("submits the exact displayed digest to the authoritative action route", async () => {
   const fetchMock = jest.fn<(url: string, options: RequestInit) => Promise<Response>>(async () => (
     { ok: true, status: 202, json: async () => ({ decision_id: "decision-1" }) } as Response
@@ -48,9 +59,16 @@ test("submits the exact displayed digest to the authoritative action route", asy
 });
 
 test("does not claim success after a stale authoritative conflict", async () => {
-  global.fetch = jest.fn(async () => ({ ok: false, status: 409 })) as unknown as typeof fetch;
+  global.fetch = jest.fn(async () => ({
+    ok: false,
+    status: 409,
+    json: async () => ({ detail: "a plan approval decision is already recorded for this revision" })
+  })) as unknown as typeof fetch;
 
-  await expect(apiClient.decide(run, "approve")).rejects.toThrow("409");
+  await expect(apiClient.decide(run, "approve")).rejects.toThrow(
+    "a plan approval decision is already recorded for this revision"
+  );
+  await expect(apiClient.decide(run, "approve")).rejects.toThrow("Refresh the workflow before submitting another decision.");
 });
 
 test("submits only an exact server-pinned MCP subset and preserves null defaults", async () => {
