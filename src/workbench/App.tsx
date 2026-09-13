@@ -703,7 +703,10 @@ function VisualizeOverlay({ graph, title, onClose, onSelect }: { graph: ReturnTy
 function phaseIdFor(node: PositionedWorkflowNode): LifecyclePhaseId | null { return allLifecyclePhaseIds.includes(node.id as LifecyclePhaseId) ? node.id as LifecyclePhaseId : null; }
 function currentPhaseId(graph: ReturnType<typeof graphFor>, run: Run): LifecyclePhaseId {
   const preferred = graph.nodes.find((node) => node.id === preferredWorkflowNodeId(graph.nodes, run.active_gate));
-  return preferred ? phaseIdFor(preferred) ?? "work_specification" : "work_specification";
+  if (preferred) return phaseIdFor(preferred) ?? "work_specification";
+  if (run.active_gate === "plan") return "plan_approval";
+  if (run.active_gate === "implementation") return "implementation_approval";
+  return lifecyclePhasesFor(run).includes("work_specification") ? "work_specification" : "specification";
 }
 
 function ImplementationRedriveControls({ client, run, onComplete }: { client: ApiClient; run: Run; onComplete: () => Promise<void | boolean> }) {

@@ -49,6 +49,18 @@ test("opens a run directly in the phase-driven control center and keeps visualiz
   expect(visualize).toHaveFocus();
 });
 
+test("keeps a legacy plan approval actionable without stage projections", async () => {
+  const legacyRun: Run = { ...run, stages: undefined, workflow_graph: undefined };
+  const user = userEvent.setup();
+  render(<App client={client({ listRuns: async () => ({ runs: [legacyRun], revision: "legacy", etag: "legacy", unchanged: false }), getRun: async () => legacyRun })} />);
+
+  await user.click(await screen.findByText(legacyRun.workflow_id!));
+
+  expect(window.location.search).toBe("?phase=plan_approval");
+  expect(await screen.findByRole("button", { name: "Approve" })).toBeVisible();
+  expect(screen.queryByText(/Inspection mode/)).not.toBeInTheDocument();
+});
+
 test("closes a shared visualization link into its underlying control center", async () => {
   window.history.replaceState({}, "", `/runs/${run.run_id}?phase=planning&visualize=1`);
   const user = userEvent.setup();
