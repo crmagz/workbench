@@ -174,7 +174,9 @@ test("expands separate agent environments into independently cached log streams"
   await user.click(screen.getByRole("button", { name: "Show agent environments" }));
   expect(screen.getByText("python-coding-agent")).toBeVisible();
   expect(screen.getByText("adversarial-review-agent")).toBeVisible();
+  expect(screen.getByRole("button", { name: "Hide agent environments" })).toHaveClass("audit-environments-expand");
   const expanders = screen.getAllByRole("button", { name: "View logs →" });
+  expect(expanders[0]).toHaveClass("audit-logs-expand");
   await user.click(expanders[0]);
   await user.click(expanders[1]);
   expect(await screen.findByText("agent-run-1 output")).toBeVisible();
