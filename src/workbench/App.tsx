@@ -739,7 +739,43 @@ function VisualizeOverlay({ graph, title, onClose, onSelect }: { graph: ReturnTy
   return createPortal(<div className="visualize-overlay" role="presentation" onMouseDown={onClose}><section ref={dialogRef} className="visualize-dialog" role="dialog" aria-modal="true" aria-labelledby="visualize-title" tabIndex={-1} onMouseDown={(event) => event.stopPropagation()} onKeyDown={(event) => trapDialogFocus(event, onClose)}><header><div><p className="eyebrow">Relay-grid visualization</p><h2 id="visualize-title">{title}</h2></div><button className="visualize-close-button" aria-label="Close visualization" onClick={onClose}>✕ Close</button></header><div className="visualize-canvas-body"><p className="control-note">Scroll at 100% scale to inspect the computed workflow layout. Selecting a node returns to its phase workspace.</p><ComputedRelayCanvas graph={graph} onSelect={onSelect} /></div></section></div>, document.body);
 }
 
-function phaseIdFor(node: PositionedWorkflowNode): LifecyclePhaseId | null { return allLifecyclePhaseIds.includes(node.id as LifecyclePhaseId) ? node.id as LifecyclePhaseId : null; }
+function phaseIdFor(node: PositionedWorkflowNode): LifecyclePhaseId | null {
+  const phaseId = node.parentNodeId ?? node.id;
+  return allLifecyclePhaseIds.includes(phaseId as LifecyclePhaseId) ? phaseId as LifecyclePhaseId : null;
+}
+
+const lifecycleStatusPriority: Record<PositionedWorkflowNode["status"], number> = {
+  in_progress: 0,
+  awaiting_operator: 1,
+  queued: 2,
+  needs_revision: 3,
+  failed: 4,
+  completed: 5,
+  cancelled: 6,
+  unavailable: 7,
+};
+
+function lifecyclePhaseNode(graph: ReturnType<typeof graphFor>, phase: LifecyclePhaseId): PositionedWorkflowNode | null {
+  const direct = graph.nodes.find((node) => node.id === phase);
+  if (direct) return direct;
+
+  // Parent workflow nodes are intentionally omitted from the relay canvas when
+  // their agent environments are shown as a stacked sequence. The lifecycle
+  // rail still needs one truthful phase state, so project the most active child
+  // environment back onto its parent phase without inventing any API facts.
+  const environments = graph.nodes.filter((node) => node.parentNodeId === phase);
+  if (!environments.length) return null;
+  const representative = [...environments].sort((left, right) => lifecycleStatusPriority[left.status] - lifecycleStatusPriority[right.status])[0];
+  return {
+    ...representative,
+    id: phase,
+    name: statusLabel(phase).replace(/^./, (letter) => letter.toUpperCase()),
+    type: "agent",
+    reason: `${representative.name} · ${statusLabel(representative.status)}. Agent environments are aggregated for this lifecycle phase.`,
+    parentNodeId: undefined,
+  };
+}
+
 function currentPhaseId(graph: ReturnType<typeof graphFor>, run: Run): LifecyclePhaseId {
   const preferred = graph.nodes.find((node) => node.id === preferredWorkflowNodeId(graph.nodes, run.active_gate));
   if (preferred) return phaseIdFor(preferred) ?? "work_specification";
@@ -770,7 +806,7 @@ function ImplementationRedriveControls({ client, run, onComplete }: { client: Ap
 
 function WorkflowControlCenter({ client, run, timeline, selectedPhase, canvasOverlayOpen, onBack, onSelectPhase, onVisualize, onCloseVisualize, onRefresh, decisionNotice, onDecisionComplete }: { client: ApiClient; run: Run; timeline: TimelineEvent[]; selectedPhase: LifecyclePhaseId; canvasOverlayOpen: boolean; onBack: () => void; onSelectPhase: (phase: LifecyclePhaseId) => void; onVisualize: () => void; onCloseVisualize: () => void; onRefresh: () => Promise<void | boolean>; decisionNotice: string | null; onDecisionComplete: () => void }) {
   const graph = graphFor(run);
-  const canonicalPhases = lifecyclePhasesFor(run).map((phase) => graph.nodes.find((node) => node.id === phase) ?? {
+  const canonicalPhases = lifecyclePhasesFor(run).map((phase) => lifecyclePhaseNode(graph, phase) ?? {
     id: phase, name: statusLabel(phase).replace(/^./, (letter) => letter.toUpperCase()), type: phase.includes("approval") ? "gate" : phase === "work_specification" || phase === "specification" ? "queue" : "agent",
     status: "unavailable", availability: "unavailable", artifactKind: null, reason: "This lifecycle phase has not been recorded for the run.", metric: "—",
     position: { x: 0, y: 0, width: 200 }

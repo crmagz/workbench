@@ -388,6 +388,46 @@ test("renders the canonical lifecycle as one Work Specification workspace", asyn
   expect(screen.queryByRole("heading", { name: "Specification evaluation", level: 4 })).not.toBeInTheDocument();
 });
 
+test("projects active planning environments onto the planning lifecycle phase", async () => {
+  const environmentRun: Run = {
+    ...run,
+    status: "planning",
+    active_gate: null,
+    stages: [
+      { stage_id: "work_specification", label: "Work Specification", state: "completed", availability: "authoritative", reason: "Approved.", artifact_kind: "work_specification" },
+      { stage_id: "planning", label: "Planning", state: "in_progress", availability: "authoritative", reason: "Agent environments running.", artifact_kind: null },
+      { stage_id: "plan_approval", label: "Plan approval", state: "unavailable", availability: "unavailable", reason: "Not started.", artifact_kind: null },
+      { stage_id: "implementation", label: "Implementation", state: "unavailable", availability: "unavailable", reason: "Not started.", artifact_kind: null },
+      { stage_id: "implementation_approval", label: "Implementation approval", state: "unavailable", availability: "unavailable", reason: "Not started.", artifact_kind: null },
+    ],
+    workflow_graph: {
+      nodes: [
+        { stage_id: "work_specification", label: "Work Specification", state: "completed", availability: "authoritative", reason: "Approved.", artifact_kind: "work_specification", node_type: "queue" },
+        { stage_id: "planning", label: "Planning", state: "in_progress", availability: "authoritative", reason: "Agent environments running.", artifact_kind: null, node_type: "agent" },
+        { stage_id: "discovery", label: "Discovery", state: "completed", availability: "authoritative", reason: "Repository discovery complete.", artifact_kind: null, node_type: "agent", parent_node_id: "planning", agent_role: "discovery" },
+        { stage_id: "planner", label: "Planner", state: "in_progress", availability: "authoritative", reason: "Producing the plan.", artifact_kind: null, node_type: "agent", parent_node_id: "planning", agent_role: "planner" },
+        { stage_id: "plan_approval", label: "Plan approval", state: "unavailable", availability: "unavailable", reason: "Not started.", artifact_kind: null, node_type: "gate" },
+        { stage_id: "implementation", label: "Implementation", state: "unavailable", availability: "unavailable", reason: "Not started.", artifact_kind: null, node_type: "agent" },
+        { stage_id: "implementation_approval", label: "Implementation approval", state: "unavailable", availability: "unavailable", reason: "Not started.", artifact_kind: null, node_type: "gate" },
+      ],
+      edges: [
+        { source_node_id: "work_specification", target_node_id: "planning", style: "solid", emphasis: "primary" },
+        { source_node_id: "planning", target_node_id: "plan_approval", style: "solid", emphasis: "primary" },
+        { source_node_id: "plan_approval", target_node_id: "implementation", style: "solid", emphasis: "primary" },
+        { source_node_id: "implementation", target_node_id: "implementation_approval", style: "solid", emphasis: "primary" },
+      ],
+    },
+  };
+  const user = userEvent.setup();
+  render(<App client={client({ listRuns: async () => ({ runs: [environmentRun], revision: "environments", etag: "environments", unchanged: false }), getRun: async () => environmentRun })} />);
+
+  await user.click(await screen.findByText(environmentRun.workflow_id!));
+
+  expect(await screen.findByRole("heading", { name: "Planning" })).toBeVisible();
+  expect(screen.getByRole("button", { name: "Focus Planning" })).toHaveAttribute("aria-pressed", "true");
+  expect(screen.getByRole("button", { name: "Focus Planning" }).closest("li")).toHaveClass("active");
+});
+
 test("renders project-scoped agent operations without offering execution controls", async () => {
   const agent = {
     registration_id: "developer", registration_version: "1.0.0", manifest_sha256: "b".repeat(64), component_id: "developer", component_version: "1.0.0", lifecycle: "active", maturity: "active", execution_class: "adapter", owner: "cogito-platform", capabilities: ["develop"],
