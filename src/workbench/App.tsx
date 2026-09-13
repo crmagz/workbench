@@ -755,9 +755,29 @@ const lifecycleStatusPriority: Record<PositionedWorkflowNode["status"], number> 
   unavailable: 7,
 };
 
-function lifecyclePhaseNode(graph: ReturnType<typeof graphFor>, phase: LifecyclePhaseId): PositionedWorkflowNode | null {
+function lifecyclePhaseNode(graph: ReturnType<typeof graphFor>, run: Run, phase: LifecyclePhaseId): PositionedWorkflowNode | null {
   const direct = graph.nodes.find((node) => node.id === phase);
   if (direct) return direct;
+
+  // The graph keeps a parent stage so the server can express a stack of agent
+  // environments. graphFor deliberately suppresses that parent from the relay
+  // canvas, but the lifecycle rail must preserve its authoritative state during
+  // the hand-off between those environments.
+  const graphNode = run.workflow_graph?.nodes.find((node) => node.stage_id === phase);
+  const serverNode = graphNode ?? run.stages?.find((stage) => stage.stage_id === phase);
+  if (serverNode) {
+    return {
+      id: serverNode.stage_id,
+      name: serverNode.label,
+      type: graphNode?.node_type ?? (phase.includes("approval") ? "gate" : phase === "work_specification" || phase === "specification" ? "queue" : "agent"),
+      status: serverNode.state,
+      availability: serverNode.availability,
+      artifactKind: serverNode.artifact_kind,
+      reason: serverNode.reason,
+      metric: graphNode?.metric ?? (serverNode.artifact_kind ? String(run.artifacts.filter((artifact) => artifact.kind === serverNode.artifact_kind).length) : "—"),
+      position: { x: 0, y: 0, width: 200 },
+    };
+  }
 
   // Parent workflow nodes are intentionally omitted from the relay canvas when
   // their agent environments are shown as a stacked sequence. The lifecycle
@@ -777,10 +797,37 @@ function lifecyclePhaseNode(graph: ReturnType<typeof graphFor>, phase: Lifecycle
 }
 
 function currentPhaseId(graph: ReturnType<typeof graphFor>, run: Run): LifecyclePhaseId {
-  const preferred = graph.nodes.find((node) => node.id === preferredWorkflowNodeId(graph.nodes, run.active_gate));
-  if (preferred) return phaseIdFor(preferred) ?? "work_specification";
+  // Legacy projections retain their historic, flat phase semantics until the
+  // API sends the canonical Work Specification lifecycle.
+  if (!lifecyclePhasesFor(run).includes("work_specification")) {
+    const preferred = graph.nodes.find((node) => node.id === preferredWorkflowNodeId(graph.nodes, run.active_gate));
+    if (preferred) return phaseIdFor(preferred) ?? "work_specification";
+    if (run.active_gate === "plan") return "plan_approval";
+    if (run.active_gate === "implementation") return "implementation_approval";
+    return "specification";
+  }
+
   if (run.active_gate === "plan") return "plan_approval";
   if (run.active_gate === "implementation") return "implementation_approval";
+
+  // Resolve selection from the phase-level projection before consulting the
+  // rendered relay nodes. The relay intentionally omits parent nodes when it
+  // displays environment stacks, which must never make an in-progress parent
+  // appear to return to Work Specification between Discovery and Planner.
+  const serverNodes = run.workflow_graph?.nodes ?? run.stages ?? [];
+  const canonicalNodes = lifecyclePhasesFor(run).flatMap((phase) => {
+    const node = serverNodes.find((candidate) => candidate.stage_id === phase);
+    return node ? [{ phase, state: node.state }] : [];
+  });
+  for (const state of ["in_progress", "queued", "awaiting_operator", "needs_revision", "failed"] as const) {
+    const active = canonicalNodes.find((node) => node.state === state);
+    if (active) return active.phase;
+  }
+  const completed = canonicalNodes.filter((node) => node.state === "completed").at(-1);
+  if (completed) return completed.phase;
+
+  const preferred = graph.nodes.find((node) => node.id === preferredWorkflowNodeId(graph.nodes, run.active_gate));
+  if (preferred) return phaseIdFor(preferred) ?? "work_specification";
   return lifecyclePhasesFor(run).includes("work_specification") ? "work_specification" : "specification";
 }
 
@@ -806,7 +853,7 @@ function ImplementationRedriveControls({ client, run, onComplete }: { client: Ap
 
 function WorkflowControlCenter({ client, run, timeline, selectedPhase, canvasOverlayOpen, onBack, onSelectPhase, onVisualize, onCloseVisualize, onRefresh, decisionNotice, onDecisionComplete }: { client: ApiClient; run: Run; timeline: TimelineEvent[]; selectedPhase: LifecyclePhaseId; canvasOverlayOpen: boolean; onBack: () => void; onSelectPhase: (phase: LifecyclePhaseId) => void; onVisualize: () => void; onCloseVisualize: () => void; onRefresh: () => Promise<void | boolean>; decisionNotice: string | null; onDecisionComplete: () => void }) {
   const graph = graphFor(run);
-  const canonicalPhases = lifecyclePhasesFor(run).map((phase) => lifecyclePhaseNode(graph, phase) ?? {
+  const canonicalPhases = lifecyclePhasesFor(run).map((phase) => lifecyclePhaseNode(graph, run, phase) ?? {
     id: phase, name: statusLabel(phase).replace(/^./, (letter) => letter.toUpperCase()), type: phase.includes("approval") ? "gate" : phase === "work_specification" || phase === "specification" ? "queue" : "agent",
     status: "unavailable", availability: "unavailable", artifactKind: null, reason: "This lifecycle phase has not been recorded for the run.", metric: "—",
     position: { x: 0, y: 0, width: 200 }
