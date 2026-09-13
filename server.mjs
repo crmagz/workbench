@@ -10,7 +10,7 @@ const allowed = [
   { method: "GET", path: /^\/api\/v1\/workbench\/projects$/ },
   { method: "GET", path: /^\/api\/v1\/workbench\/agents(?:\/[^/]+\/[^/]+(?:\/invocations)?)?$/ },
   { method: "GET", path: /^\/api\/v1\/workbench\/agent-invocations\/[^/]+\/[^/]+$/ },
-  { method: "POST", path: /^\/api\/v1\/planning-runs\/[^/]+\/(?:generate-work-specification|accept-work-specification|evaluate-work-specification|revise-work-specification|generate-product-specification|accept-product-specification|evaluate-product-specification|waive-specification-evaluation|select-product-specification|revise-product-specification|generate-plan|cancel)$/ },
+  { method: "POST", path: /^\/api\/v1\/planning-runs\/[^/]+\/(?:generate-work-specification|accept-work-specification|evaluate-work-specification|revise-work-specification|generate-product-specification|accept-product-specification|evaluate-product-specification|waive-specification-evaluation|select-product-specification|revise-product-specification|generate-plan|cancel|redrive-implementation)$/ },
   { method: "GET", path: /^\/api\/v1\/workbench\/runs(?:\/[^/]+(?:\/(?:timeline(?:\/[^/]+\/logs)?|evidence\/(?:source|work_specification|product_specification|specification_evaluation|plan|implementation)))?)?$/ },
   { method: "GET", path: /^\/api\/v1\/workbench\/runs\/[^/]+\/feedback$/ },
   { method: "POST", path: /^\/api\/v1\/workbench\/runs\/[^/]+\/feedback$/ },
