@@ -6,6 +6,17 @@ export type OperatorFeedback = { feedback_id: string; source_gate: "plan" | "imp
 export type Budget = { max_cost_usd: number; max_wall_clock_minutes: number; max_review_rounds: number; actual_cost_usd: number | null; turns_used: number | null };
 export type Execution = { phase_count: number; succeeded_phase_count: number; failed_phase_count: number; verification_passed: number; verification_failed: number; review_status: string | null; validation_status: string | null };
 export type ExternalLink = { kind: string; label: string; url: string };
+export type DeliveredPullRequest = {
+  repository: string;
+  number: number;
+  title: string;
+  url: string;
+  checks: "passed" | "failing" | "running" | "unavailable";
+  failing_check_count?: number;
+  opened_at: string;
+  merged_at?: string | null;
+  agent_role?: string | null;
+};
 export type McpToolSelection = {
   role: string;
   server_id: string;
@@ -39,6 +50,15 @@ export type TimelineEvent = {
   lifecycle_status: string | null;
   delivered: boolean;
   delivery_attempt_count: number;
+  agent_binding?: TimelineAgentBinding | null;
+  parent_event_id?: string | null;
+};
+export type TimelineAgentBinding = {
+  agent_run_id: string;
+  registration_id: string;
+  role: string;
+  environment_id: string;
+  attempt: number;
 };
 export type AuditLogLine = { timestamp: string; stream: string; message: string };
 export type AuditLogResponse = {
@@ -56,7 +76,12 @@ export type Stage = {
   reason: string;
   artifact_kind: Artifact["kind"] | null;
 };
-export type WorkflowGraphNode = Stage & { node_type: "agent" | "gate" | "queue" };
+export type WorkflowGraphNode = Stage & {
+  node_type: "agent" | "gate" | "queue";
+  parent_node_id?: string | null;
+  agent_role?: string | null;
+  metric?: string | null;
+};
 export type WorkflowGraphEdge = { source_node_id: string; target_node_id: string; style: "solid" | "dashed"; emphasis: "primary" | "secondary" };
 export type WorkflowGraph = { nodes: WorkflowGraphNode[]; edges: WorkflowGraphEdge[] };
 export type WorkflowAction = {
@@ -93,6 +118,7 @@ export type Run = {
   execution: Execution | null;
   failure_summary?: string | null;
   external_links: ExternalLink[];
+  delivered_pull_requests?: DeliveredPullRequest[] | null;
   // Omitted by older API releases and withheld entirely for non-approvers.
   mcp_capabilities?: McpCapabilities | null;
 };
@@ -137,7 +163,7 @@ export type ApiClient = {
   listRuns: (options?: { projectId?: string; etag?: string; signal?: AbortSignal }) => Promise<{ runs: Run[]; revision: string; etag: string | null; unchanged: boolean }>;
   getRun: (runId: string, signal?: AbortSignal) => Promise<Run>;
   getTimeline: (runId: string, options?: { etag?: string; signal?: AbortSignal }) => Promise<{ events: TimelineEvent[]; revision: string; etag: string | null; unchanged: boolean }>;
-  getAuditLogs: (runId: string, eventId: string, cursor?: string, tailAfter?: string) => Promise<AuditLogResponse>;
+  getAuditLogs: (runId: string, eventId: string, cursor?: string, agentRunId?: string, tailAfter?: string) => Promise<AuditLogResponse>;
   getEvidence: (runId: string, artifact: Artifact) => Promise<{ content: string; sha256: string }>;
   getFeedback: (runId: string) => Promise<Feedback[]>;
   recordFeedback: (run: Run, artifact: Artifact, stageId: string, comment: string) => Promise<Feedback>;
@@ -237,9 +263,10 @@ export const apiClient: ApiClient = {
     const body = await json(response);
     return { events: body.items, revision: body.revision, etag: response.headers.get("etag"), unchanged: false };
   },
-  async getAuditLogs(runId, eventId, cursor, tailAfter) {
+  async getAuditLogs(runId, eventId, cursor, agentRunId, tailAfter) {
     const parameters = new URLSearchParams();
     if (cursor) parameters.set("cursor", cursor);
+    if (agentRunId) parameters.set("agent_run_id", agentRunId);
     if (tailAfter) parameters.set("tail_after", tailAfter);
     const query = parameters.size ? `?${parameters.toString()}` : "";
     return json(await fetch(`${base}/workbench/runs/${encodeURIComponent(runId)}/timeline/${encodeURIComponent(eventId)}/logs${query}`));

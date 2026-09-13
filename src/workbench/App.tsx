@@ -26,9 +26,10 @@ const allLifecyclePhaseIds: LifecyclePhaseId[] = [...lifecyclePhaseIds, "specifi
 function lifecyclePhasesFor(run: Run): LifecyclePhaseId[] {
   return run.stages?.some((stage) => stage.stage_id === "work_specification") ? lifecyclePhaseIds : legacyLifecyclePhaseIds;
 }
-type WorkflowNode = { id: string; name: string; type: "agent" | "gate" | "queue"; status: string; availability: Stage["availability"]; artifactKind: Artifact["kind"] | null; reason: string; position?: { x: number; y: number; width: number }; metric: string };
+type WorkflowNode = { id: string; name: string; type: "agent" | "gate" | "queue"; status: string; availability: Stage["availability"]; artifactKind: Artifact["kind"] | null; reason: string; position?: { x: number; y: number; width: number }; metric: string; parentNodeId?: string | null };
 type WorkflowEdge = { fromNodeId: string; toNodeId: string; style: "solid" | "dashed"; emphasis: "primary" | "secondary" };
 type PositionedWorkflowNode = WorkflowNode & { position: { x: number; y: number; width: number } };
+type RelayEnvironmentGroup = { id: string; label: string; position: { x: number; y: number; width: number; height: number } };
 type RouteState = { runId: string | null; tab: DetailTab; nodeId: string | null; nodeTab: NodeDossierTab; view: WorkflowView; selectedPhase: LifecyclePhaseId | null; canvasOverlayOpen: boolean; agents: boolean; agentProjectId: string | null };
 type CatalogColumnId = "agent" | "version" | "role" | "capabilities" | "owner" | "model" | "budget" | "status";
 type CatalogColumn = { id: CatalogColumnId; label: string; required?: boolean; width: string };
@@ -262,7 +263,7 @@ function EvidenceViewer({ client, run, initial, heading = "Verified immutable ev
   return workflowLabels ? <WorkflowSpecificationWorkspace client={client} run={run} initial={initial} heading={heading} onComplete={onComplete} onDecisionComplete={onDecisionComplete} /> : <ImmutableEvidenceViewer client={client} run={run} initial={initial} heading={heading} />;
 }
 
-function WorkflowSpecificationWorkspace({ client, run, initial, heading, onComplete, onDecisionComplete, artifactSet = "work_specification", actionable = true }: { client: ApiClient; run: Run; initial?: Artifact["kind"]; heading: string; onComplete: () => Promise<void | boolean>; onDecisionComplete?: () => void; artifactSet?: ArtifactSet; actionable?: boolean }) {
+function WorkflowSpecificationWorkspace({ client, run, initial, heading, onComplete, onDecisionComplete, phase = "work_specification", artifactSet = "work_specification", actionable = true }: { client: ApiClient; run: Run; initial?: Artifact["kind"]; heading: string; onComplete: () => Promise<void | boolean>; onDecisionComplete?: () => void; phase?: LifecyclePhaseId; artifactSet?: ArtifactSet; actionable?: boolean }) {
   const artifacts = artifactSet === "work_specification"
     ? [evidenceFor(run, "product_specification") ?? evidenceFor(run, "work_specification")].filter((artifact): artifact is Artifact => artifact !== null)
     : run.artifacts.filter((artifact) => artifact.kind === artifactSet);
@@ -271,7 +272,14 @@ function WorkflowSpecificationWorkspace({ client, run, initial, heading, onCompl
     : artifactSet === "work_specification"
     ? "One Work Specification is the review and approval contract. Derived evidence remains in the audit trail."
     : artifactSet === "source" ? "The submitted specification is the main artifact for this phase." : "The product specification is the main artifact for this phase.";
-  return <section className={`workflow-specifications artifact-set-${artifactSet}`} aria-labelledby="workflow-specification-workspace-title"><div className="section-heading"><div><p className="eyebrow">Workflow specification workspace</p><h3 id="workflow-specification-workspace-title">{heading}</h3></div><small>{supportingCopy}</small></div><div className="workflow-specification-workspace"><SpecificationEvidencePanes client={client} run={run} artifacts={artifacts} initial={initial} presentationKind={artifactSet === "work_specification" ? "work_specification" : undefined} presentationEyebrow={artifactSet === "work_specification" ? "Work Specification" : undefined} />{artifactSet === "work_specification" && run.operator_feedback && <section className="card dossier-section" aria-label="Active operator feedback"><p className="eyebrow">Operator feedback</p><h4>Included in the next planning revision</h4><p>{run.operator_feedback.comment}</p><small>{run.operator_feedback.source_gate.replace("_", " ")} review · {run.operator_feedback.actor_id} · {new Date(run.operator_feedback.created_at).toLocaleString()}</small></section>}{actionable ? <>{["work_specification", "product_specification"].includes(artifactSet) && <ProductSpecificationControls client={client} run={run} onComplete={onComplete} showHeading={false} compact />}{run.active_gate && <DecisionControls client={client} run={run} onComplete={onComplete} onSuccess={onDecisionComplete} workflowLabels />}</> : <p className="inspection-only-note">Inspection mode — workflow decisions remain available only when viewing the authoritative current phase.</p>}{run.active_gate !== "plan" && <McpCapabilityEvidence run={run} />}</div></section>;
+  return <section className={`workflow-specifications artifact-set-${artifactSet}`} aria-labelledby="workflow-specification-workspace-title"><div className="section-heading"><div><p className="eyebrow">Workflow specification workspace</p><h3 id="workflow-specification-workspace-title">{heading}</h3></div><small>{supportingCopy}</small></div><div className="workflow-specification-workspace"><DeliveredChangesPanel run={run} phase={phase} /><SpecificationEvidencePanes client={client} run={run} artifacts={artifacts} initial={initial} presentationKind={artifactSet === "work_specification" ? "work_specification" : undefined} presentationEyebrow={artifactSet === "work_specification" ? "Work Specification" : undefined} />{artifactSet === "work_specification" && run.operator_feedback && <section className="dossier-section" aria-label="Active operator feedback"><p className="eyebrow">Operator feedback</p><h4>Included in the next planning revision</h4><p>{run.operator_feedback.comment}</p><small>{run.operator_feedback.source_gate.replace("_", " ")} review · {run.operator_feedback.actor_id} · {new Date(run.operator_feedback.created_at).toLocaleString()}</small></section>}{actionable ? <>{["work_specification", "product_specification"].includes(artifactSet) && <ProductSpecificationControls client={client} run={run} onComplete={onComplete} showHeading={false} compact />}{run.active_gate && <DecisionControls client={client} run={run} onComplete={onComplete} onSuccess={onDecisionComplete} workflowLabels />}</> : <p className="inspection-only-note">Inspection mode — workflow decisions remain available only when viewing the authoritative current phase.</p>}{run.active_gate !== "plan" && <McpCapabilityEvidence run={run} />}</div></section>;
+}
+
+function DeliveredChangesPanel({ run, phase }: { run: Run; phase: LifecyclePhaseId }) {
+  const pullRequests = run.delivered_pull_requests ?? [];
+  if (!pullRequests.length || (phase !== "implementation" && phase !== "implementation_approval")) return null;
+  const frozen = phase === "implementation_approval";
+  return <section className="delivered-changes" aria-labelledby="delivered-changes-title"><header><div><p className="eyebrow">Delivered changes</p><h4 id="delivered-changes-title">Pull requests</h4></div><small>{frozen ? "This set is frozen and bound to the implementation approval decision." : "Live delivery evidence — pull requests may be appended while implementation runs."}</small></header><div className="delivered-changes-list">{pullRequests.map((pullRequest) => <a key={pullRequest.url} href={pullRequest.url} target="_blank" rel="noopener noreferrer"><span className="delivered-change-repository">{pullRequest.repository} <b>#{pullRequest.number}</b></span><span className="delivered-change-title">{pullRequest.title}{pullRequest.agent_role && <small>{pullRequest.agent_role}</small>}</span><span className="delivered-change-checks">{pullRequest.checks !== "unavailable" && <Pill status={pullRequest.checks} label={pullRequest.checks === "failing" && pullRequest.failing_check_count ? `${pullRequest.failing_check_count} failing` : pullRequest.checks} />}</span><time dateTime={pullRequest.merged_at ?? pullRequest.opened_at}>{pullRequest.merged_at ? `Merged ${new Date(pullRequest.merged_at).toLocaleString()}` : `Opened ${new Date(pullRequest.opened_at).toLocaleString()}`}</time></a>)}</div></section>;
 }
 
 function SpecificationEvidencePanes({ client, run, artifacts, initial, presentationKind, presentationEyebrow }: { client: ApiClient; run: Run; artifacts: Artifact[]; initial?: Artifact["kind"]; presentationKind?: Artifact["kind"]; presentationEyebrow?: string }) {
@@ -445,6 +453,7 @@ function auditActivityLabel(event: TimelineEvent) { return auditActivityKind(eve
 
 function auditEvidenceLabel(event: TimelineEvent) {
   if (auditActivityKind(event) === "mcp") return "MCP output unavailable";
+  if (auditActivityKind(event) === "agent" && !event.agent_binding) return "Environment logs unavailable";
   if (auditActivityKind(event) === "agent") return "Pod logs unavailable";
   return "Event recorded";
 }
@@ -481,6 +490,8 @@ function prependLiveAuditLogPage(previous: AuditLogResponse, page: AuditLogRespo
 
 const LIVE_LOG_POLL_INTERVAL_MS = 2_000;
 
+function auditCacheKey(event: TimelineEvent) { return `${event.event_id}:${event.agent_binding?.agent_run_id ?? ""}`; }
+
 function Timeline({ client = apiClient, runId = "", events, title = "Authoritative timeline", failureSummary }: { client?: ApiClient; runId?: string; events: TimelineEvent[]; title?: string; failureSummary?: string | null }) {
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [logs, setLogs] = useState<Record<string, AuditLogResponse>>({});
@@ -488,53 +499,63 @@ function Timeline({ client = apiClient, runId = "", events, title = "Authoritati
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [failedCursors, setFailedCursors] = useState<Record<string, string | undefined>>({});
   const [tailing, setTailing] = useState<Set<string>>(() => new Set());
+  const eventById = useMemo(() => new Map(events.map((event) => [event.event_id, event])), [events]);
+  const childrenByParent = useMemo(() => events.reduce<Map<string, TimelineEvent[]>>((children, event) => {
+    if (event.parent_event_id) children.set(event.parent_event_id, [...(children.get(event.parent_event_id) ?? []), event]);
+    return children;
+  }, new Map()), [events]);
+  const rootEvents = events.filter((event) => !event.parent_event_id || !eventById.has(event.parent_event_id));
   const widestStatusLength = Math.max("Status".length, ...events.map((event) => statusLabel(auditEventState(event)).length));
   const auditStatusColumn = `max(112px, calc(${widestStatusLength}ch + 42px))`;
   useEffect(() => { setExpanded(new Set()); setLogs({}); setLoading(new Set()); setErrors({}); setFailedCursors({}); setTailing(new Set()); }, [runId]);
   const loadLogs = useCallback(async (event: TimelineEvent, cursor?: string, tailAfter?: string) => {
-    setLoading((current) => new Set(current).add(event.event_id));
-    setErrors((current) => { const next = { ...current }; delete next[event.event_id]; return next; });
-    setFailedCursors((current) => { const next = { ...current }; delete next[event.event_id]; return next; });
+    const key = auditCacheKey(event);
+    setLoading((current) => new Set(current).add(key));
+    setErrors((current) => { const next = { ...current }; delete next[key]; return next; });
+    setFailedCursors((current) => { const next = { ...current }; delete next[key]; return next; });
     try {
-      const page = tailAfter
-        ? await client.getAuditLogs(runId, event.event_id, cursor, tailAfter)
+      const page = event.agent_binding || tailAfter
+        ? await client.getAuditLogs(runId, event.event_id, cursor, event.agent_binding?.agent_run_id, tailAfter)
         : await client.getAuditLogs(runId, event.event_id, cursor);
       setLogs((current) => {
-        const previous = current[event.event_id];
+        const previous = current[key];
         const next = tailAfter && previous
           ? prependLiveAuditLogPage(previous, page)
           : cursor && previous ? appendAuditLogPage(previous, page) : page;
-        return { ...current, [event.event_id]: next };
+        return { ...current, [key]: next };
       });
     } catch {
-      setErrors((current) => ({ ...current, [event.event_id]: "Log evidence could not be loaded. Try again." }));
-      setFailedCursors((current) => ({ ...current, [event.event_id]: cursor }));
-    } finally { setLoading((current) => { const next = new Set(current); next.delete(event.event_id); return next; }); }
+      setErrors((current) => ({ ...current, [key]: "Log evidence could not be loaded. Try again." }));
+      setFailedCursors((current) => ({ ...current, [key]: cursor }));
+    } finally { setLoading((current) => { const next = new Set(current); next.delete(key); return next; }); }
   }, [client, runId]);
   useEffect(() => {
     if (tailing.size === 0) return;
     const timer = window.setInterval(() => {
-      for (const eventId of tailing) {
-        const event = events.find((candidate) => candidate.event_id === eventId);
-        const tailAfter = logs[eventId]?.tail_cursor;
-        if (event && tailAfter && !loading.has(eventId)) void loadLogs(event, undefined, tailAfter);
+      for (const key of tailing) {
+        const event = events.find((candidate) => auditCacheKey(candidate) === key);
+        const tailAfter = logs[key]?.tail_cursor;
+        if (event && tailAfter && !loading.has(key)) void loadLogs(event, undefined, tailAfter);
       }
     }, LIVE_LOG_POLL_INTERVAL_MS);
     return () => window.clearInterval(timer);
   }, [events, loadLogs, loading, logs, tailing]);
   const toggle = (event: TimelineEvent) => {
-    if (!event.log_evidence_available) return;
-    const isExpanded = expanded.has(event.event_id);
-    setExpanded((current) => { const next = new Set(current); if (isExpanded) next.delete(event.event_id); else next.add(event.event_id); return next; });
-    if (isExpanded) setTailing((current) => { const next = new Set(current); next.delete(event.event_id); return next; });
-    if (!isExpanded && !logs[event.event_id] && !loading.has(event.event_id)) void loadLogs(event);
+    if (!event.log_evidence_available && !(childrenByParent.get(event.event_id)?.length)) return;
+    const key = auditCacheKey(event);
+    const isExpanded = expanded.has(key);
+    setExpanded((current) => { const next = new Set(current); if (isExpanded) next.delete(key); else next.add(key); return next; });
+    if (isExpanded) setTailing((current) => { const next = new Set(current); next.delete(key); return next; });
+    if (!isExpanded && !logs[key] && !loading.has(key)) void loadLogs(event);
   };
-  return <section className="card audit-timeline" style={{ "--audit-status-column": auditStatusColumn } as CSSProperties}><h2 className="panel-title">{title}</h2>{events.length === 0 ? <p className="control-note">No persisted lifecycle events are available yet.</p> : <div className="timeline"><div className="audit-column-headings" aria-hidden="true"><span>Status</span><span>Type</span><span>Activity</span><span>Occurred</span><span>Logs</span></div>{events.map((event) => {
-    const isExpanded = expanded.has(event.event_id); const logPage = logs[event.event_id]; const isLoading = loading.has(event.event_id); const detailId = `audit-event-${event.event_id}`; const failureReason = event.lifecycle_status === "FAILED" ? failureSummary : null;
-    const state = auditEventState(event);
-    const isTailing = tailing.has(event.event_id);
-    return <div className="audit-event" key={event.event_id}><div className="audit-event-row"><span className="flow-status"><Pill status={state} /></span><span className={`audit-activity-kind ${auditActivityKind(event)}`}>{auditActivityLabel(event)}</span><span className="audit-event-primary"><b>{statusLabel(event.event_type)}</b><small>{auditEventContext(event)}</small>{failureReason && <p className="audit-failure" role="alert"><b>Failure reason:</b> {failureReason}</p>}</span><span className="audit-event-occurred"><b>{new Date(event.occurred_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" })}</b></span>{event.log_evidence_available && auditActivityKind(event) === "agent" ? <button className="audit-expand" type="button" aria-label={isExpanded ? "Hide logs" : "View logs →"} onClick={() => toggle(event)} aria-expanded={isExpanded} aria-controls={detailId}>{isExpanded ? "Hide logs" : "View logs"}</button> : <span className="audit-evidence-unavailable">{auditEvidenceLabel(event)}</span>}</div>{isExpanded && <div className="audit-details" id={detailId}><div className="audit-output" aria-busy={isLoading}>{isLoading && <p className="control-note" role="status">Loading pod execution logs…</p>}{errors[event.event_id] && <p className="evidence-error" role="alert">{errors[event.event_id]} <button className="text-button" type="button" onClick={() => void loadLogs(event, failedCursors[event.event_id])}>Retry</button></p>}{logPage && <>{logPage.lines.length > 0 ? <pre className="audit-log-output" aria-label="Pod execution logs"><code>{logPage.lines.map((line) => <span className="audit-log-line" key={auditLogLineKey(line)}>{highlightLogLine(`${line.timestamp} [${line.stream}] ${line.message}`)}</span>)}</code></pre> : <p className="control-note">{logAvailabilityMessage(logPage.availability)}</p>}{logPage.availability === "available" && logPage.tail_cursor && <div className="audit-log-tail"><span role="status" aria-atomic="true">{isTailing ? "Live tailing pod output every 2 seconds." : "Live tail paused."}</span><button className="text-button" type="button" disabled={isLoading} aria-pressed={isTailing} onClick={() => setTailing((current) => { const next = new Set(current); if (next.has(event.event_id)) next.delete(event.event_id); else next.add(event.event_id); return next; })}>{isTailing ? "Pause live tail" : "Tail live logs"}</button></div>}{logPage.next_cursor && <button className="text-button" type="button" disabled={isLoading} onClick={() => void loadLogs(event, logPage.next_cursor!)}>Load earlier output</button>}</>}</div></div>}</div>;
-  })}</div>}</section>;
+  const renderEvent = (event: TimelineEvent, child = false) => {
+    const key = auditCacheKey(event); const children = childrenByParent.get(event.event_id) ?? [];
+    const isGroup = children.length > 0; const isExpanded = expanded.has(key); const logPage = logs[key]; const isLoading = loading.has(key); const detailId = `audit-event-${key.replaceAll(/[^a-zA-Z0-9_-]/g, "-")}`; const failureReason = event.lifecycle_status === "FAILED" ? failureSummary : null;
+    const state = auditEventState(event); const isTailing = tailing.has(key); const role = event.agent_binding?.role ?? auditEventContext(event);
+    const control = isGroup ? <button className="audit-expand" type="button" aria-label={isExpanded ? "Hide agent environments" : "Show agent environments"} onClick={() => toggle(event)} aria-expanded={isExpanded} aria-controls={detailId}>{isExpanded ? "Hide environments" : `Show ${children.length} environment${children.length === 1 ? "" : "s"}`}</button> : event.log_evidence_available && auditActivityKind(event) === "agent" ? <button className="audit-expand" type="button" aria-label={isExpanded ? "Hide logs" : "View logs →"} onClick={() => toggle(event)} aria-expanded={isExpanded} aria-controls={detailId}>{isExpanded ? "Hide logs" : "View logs"}</button> : <span className="audit-evidence-unavailable">{auditEvidenceLabel(event)}</span>;
+    return <Fragment key={key}><div className={`audit-event${child ? " audit-agent-environment" : ""}`}><div className="audit-event-row"><span className="flow-status"><Pill status={state} /></span><span className={`audit-activity-kind ${auditActivityKind(event)}`}>{auditActivityLabel(event)}</span><span className="audit-event-primary"><b>{event.agent_binding ? `Attempt ${event.agent_binding.attempt} · ${statusLabel(event.event_type)}` : statusLabel(event.event_type)}</b><small>{auditEventContext(event)}</small>{failureReason && <p className="audit-failure" role="alert"><b>Failure reason:</b> {failureReason}</p>}</span><span className="audit-event-identity"><b>{role}</b>{event.agent_binding && <small>{event.agent_binding.environment_id}</small>}</span><span className="audit-event-occurred"><b>{new Date(event.occurred_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" })}</b></span>{control}</div>{isGroup && isExpanded && <div className="audit-child-events" id={detailId}>{children.map((agentEvent) => renderEvent(agentEvent, true))}</div>}{!isGroup && isExpanded && <div className="audit-details" id={detailId}><div className="audit-output" aria-busy={isLoading}>{isLoading && <p className="control-note" role="status">Loading pod execution logs…</p>}{errors[key] && <p className="evidence-error" role="alert">{errors[key]} <button className="text-button" type="button" onClick={() => void loadLogs(event, failedCursors[key])}>Retry</button></p>}{logPage && <>{logPage.lines.length > 0 ? <pre className="audit-log-output" aria-label={event.agent_binding ? `Pod execution logs ${event.agent_binding.environment_id}` : "Pod execution logs"}><code>{logPage.lines.map((line) => <span className="audit-log-line" key={auditLogLineKey(line)}>{highlightLogLine(`${line.timestamp} [${line.stream}] ${line.message}`)}</span>)}</code></pre> : <p className="control-note">{logAvailabilityMessage(logPage.availability)}</p>}{logPage.availability === "available" && logPage.tail_cursor && <div className="audit-log-tail"><span role="status" aria-atomic="true">{isTailing ? "Live tailing pod output every 2 seconds." : "Live tail paused."}</span><button className="text-button" type="button" disabled={isLoading} aria-pressed={isTailing} onClick={() => setTailing((current) => { const next = new Set(current); if (next.has(key)) next.delete(key); else next.add(key); return next; })}>{isTailing ? "Pause live tail" : "Tail live logs"}</button></div>}{logPage.next_cursor && <button className="text-button" type="button" disabled={isLoading} onClick={() => void loadLogs(event, logPage.next_cursor!)}>Load earlier output</button>}</>}</div></div>}</div></Fragment>;
+  };
+  return <section className="card audit-timeline" style={{ "--audit-status-column": auditStatusColumn } as CSSProperties}><h2 className="panel-title">{title}</h2>{events.length === 0 ? <p className="control-note">No persisted lifecycle events are available yet.</p> : <div className="timeline"><div className="audit-column-headings" aria-hidden="true"><span>Status</span><span>Type</span><span>Activity</span><span>Role</span><span>Occurred</span><span>Logs</span></div>{rootEvents.map((event) => renderEvent(event))}</div>}</section>;
 }
 
 function stageTone(stage: Stage) { return stage.state === "failed" || stage.state === "cancelled" ? "err" : stage.state === "awaiting_operator" || stage.state === "needs_revision" ? "warn" : stage.state === "in_progress" ? "active" : stage.state === "completed" ? "run" : "idle"; }
@@ -542,18 +563,24 @@ function relatedEvents(stage: Stage, events: TimelineEvent[]) {
   return events.filter((event) => (event.stage_ids?.length ? event.stage_ids : event.stage_id ? [event.stage_id] : []).includes(stage.stage_id)).slice(0, 3);
 }
 
-function graphFor(run: Run): { nodes: PositionedWorkflowNode[]; edges: WorkflowEdge[]; width: number; height: number } {
+function graphFor(run: Run): { nodes: PositionedWorkflowNode[]; edges: WorkflowEdge[]; groups: RelayEnvironmentGroup[]; width: number; height: number } {
   const graph = run.workflow_graph;
-  const sourceNodes: WorkflowNode[] = graph ? graph.nodes.map((node) => ({
+  const rawNodes: WorkflowNode[] = graph ? graph.nodes.map((node) => ({
     id: node.stage_id, name: node.label, type: node.node_type, status: node.state, availability: node.availability,
-    artifactKind: node.artifact_kind, reason: node.reason, metric: node.artifact_kind ? String(run.artifacts.filter((artifact) => artifact.kind === node.artifact_kind).length) : "—"
+    artifactKind: node.artifact_kind, reason: node.reason, metric: node.metric ?? (node.artifact_kind ? String(run.artifacts.filter((artifact) => artifact.kind === node.artifact_kind).length) : "—"), parentNodeId: node.parent_node_id
   })) : (run.stages ?? []).map((stage) => ({
     id: stage.stage_id, name: stage.label, type: stage.stage_id.includes("approval") ? "gate" : stage.stage_id === "work_specification" || stage.stage_id === "specification" ? "queue" : "agent", status: stage.state, availability: stage.availability,
     artifactKind: stage.artifact_kind, reason: stage.reason, metric: stage.artifact_kind ? String(run.artifacts.filter((artifact) => artifact.kind === stage.artifact_kind).length) : "—"
   }));
+  const environmentChildren = new Map<string, WorkflowNode[]>();
+  rawNodes.forEach((node) => { if (node.parentNodeId) environmentChildren.set(node.parentNodeId, [...(environmentChildren.get(node.parentNodeId) ?? []), node]); });
+  const sourceNodes = rawNodes.filter((node) => !environmentChildren.has(node.id));
+  const firstChild = (id: string) => environmentChildren.get(id)?.[0]?.id ?? id;
+  const lastChild = (id: string) => environmentChildren.get(id)?.at(-1)?.id ?? id;
   const edges: WorkflowEdge[] = graph ? graph.edges.map((edge) => ({
-    fromNodeId: edge.source_node_id, toNodeId: edge.target_node_id, style: edge.style, emphasis: edge.emphasis
+    fromNodeId: lastChild(edge.source_node_id), toNodeId: firstChild(edge.target_node_id), style: edge.style, emphasis: edge.emphasis
   })) : sourceNodes.slice(1).map((node, index) => ({ fromNodeId: sourceNodes[index].id, toNodeId: node.id, style: "solid", emphasis: "primary" }));
+  environmentChildren.forEach((children) => children.slice(1).forEach((child, index) => edges.push({ fromNodeId: children[index].id, toNodeId: child.id, style: "dashed", emphasis: "secondary" })));
   const NODE_W = 200, NODE_H = 128, COL_GAP = 90, ROW_GAP = 24, PAD = 44;
   const incoming = new Map(sourceNodes.map((node) => [node.id, 0]));
   const outgoing = new Map(sourceNodes.map((node) => [node.id, [] as string[]]));
@@ -568,6 +595,10 @@ function graphFor(run: Run): { nodes: PositionedWorkflowNode[]; edges: WorkflowE
   // give each unresolved node a deterministic trailing rank so no cards overlap.
   let fallbackRank = Math.max(0, ...rank.values()) + 1;
   sourceNodes.forEach((node) => { if (!rank.has(node.id)) rank.set(node.id, fallbackRank++); });
+  environmentChildren.forEach((children) => {
+    const groupRank = rank.get(children[0].id) ?? 0;
+    children.forEach((child) => rank.set(child.id, groupRank));
+  });
   const layers = new Map<number, WorkflowNode[]>();
   sourceNodes.forEach((node) => { const nodeRank = rank.get(node.id) ?? 0; layers.set(nodeRank, [...(layers.get(nodeRank) ?? []), node]); });
   const maxRankHeight = Math.max(NODE_H, ...[...layers.values()].map((layer) => layer.length * NODE_H + Math.max(0, layer.length - 1) * ROW_GAP));
@@ -579,7 +610,16 @@ function graphFor(run: Run): { nodes: PositionedWorkflowNode[]; edges: WorkflowE
     const y = PAD + (maxRankHeight - layerHeight) / 2 + slot * (NODE_H + ROW_GAP);
     return { ...node, position: { x: PAD + nodeRank * (NODE_W + COL_GAP), y, width: NODE_W } };
   });
-  return { nodes, edges, width, height };
+  const positionedById = new Map(nodes.map((node) => [node.id, node]));
+  const groups = [...environmentChildren.entries()].flatMap(([parentId, children]) => {
+    const positioned = children.map((child) => positionedById.get(child.id)).filter((child): child is PositionedWorkflowNode => Boolean(child));
+    if (!positioned.length) return [];
+    const parentLabel = rawNodes.find((node) => node.id === parentId)?.name ?? statusLabel(parentId).replace(/^./, (letter) => letter.toUpperCase());
+    const top = Math.min(...positioned.map((node) => node.position.y));
+    const bottom = Math.max(...positioned.map((node) => node.position.y + NODE_H));
+    return [{ id: parentId, label: `${parentLabel} · agent environments`, position: { x: positioned[0].position.x - 12, y: top - 30, width: NODE_W + 24, height: bottom - top + 60 } }];
+  });
+  return { nodes, edges, groups, width, height };
 }
 function evidenceCaption(node: PositionedWorkflowNode) {
   if (!node.artifactKind) return "no evidence";
@@ -675,6 +715,10 @@ function WorkflowCanvas({ client, run, timeline, onBack, onRefresh, decisionNoti
 }
 
 function relayEdgePath(source: PositionedWorkflowNode, target: PositionedWorkflowNode) {
+  if (source.position.x === target.position.x) {
+    const x = source.position.x + source.position.width / 2;
+    return `M ${x} ${source.position.y + 128} L ${x} ${target.position.y}`;
+  }
   const x1 = source.position.x + source.position.width;
   const y1 = source.position.y + 64;
   const x2 = target.position.x;
@@ -685,7 +729,7 @@ function relayEdgePath(source: PositionedWorkflowNode, target: PositionedWorkflo
 
 function ComputedRelayCanvas({ graph, onSelect }: { graph: ReturnType<typeof graphFor>; onSelect: (node: PositionedWorkflowNode) => void }) {
   const byId = new Map(graph.nodes.map((node) => [node.id, node]));
-  return <div className="relay-grid-scroll"><div className="relay-grid-canvas" style={{ width: graph.width, height: graph.height }}><svg className="relay-edges" width={graph.width} height={graph.height} aria-hidden="true">{graph.edges.map((edge) => { const source = byId.get(edge.fromNodeId); const target = byId.get(edge.toNodeId); return source && target ? <path key={`${edge.fromNodeId}:${edge.toNodeId}`} d={relayEdgePath(source, target)} className={edge.emphasis} strokeDasharray={edge.style === "dashed" ? "5 5" : undefined} /> : null; })}</svg>{graph.nodes.map((node) => <button key={node.id} aria-label={`Select ${node.name}`} className={`relay-grid-node ${node.type} ${statusTone(node.status)}`} style={{ left: node.position.x, top: node.position.y, width: node.position.width }} onClick={() => onSelect(node)}><span className="relay-node-icon" aria-hidden="true">{node.type === "agent" ? "✦" : node.type === "gate" ? "◇" : "▤"}</span><span className="relay-node-copy"><b>{node.name}</b><small>{node.type}</small></span><i className="relay-node-status" /><span className="relay-node-metric"><b>{node.metric}</b><small>{evidenceCaption(node)}</small></span></button>)}</div></div>;
+  return <div className="relay-grid-scroll"><div className="relay-grid-canvas" style={{ width: graph.width, height: graph.height }}><div className="relay-environment-groups" aria-hidden="true">{graph.groups.map((group) => <div key={group.id} className="relay-environment-group" style={{ left: group.position.x, top: group.position.y, width: group.position.width, height: group.position.height }}><span>{group.label}</span></div>)}</div><svg className="relay-edges" width={graph.width} height={graph.height} aria-hidden="true">{graph.edges.map((edge) => { const source = byId.get(edge.fromNodeId); const target = byId.get(edge.toNodeId); return source && target ? <path key={`${edge.fromNodeId}:${edge.toNodeId}`} d={relayEdgePath(source, target)} className={edge.emphasis} strokeDasharray={edge.style === "dashed" ? "5 5" : undefined} /> : null; })}</svg>{graph.nodes.map((node) => <button key={node.id} aria-label={`Select ${node.name}`} className={`relay-grid-node ${node.type} ${statusTone(node.status)}`} style={{ left: node.position.x, top: node.position.y, width: node.position.width }} onClick={() => onSelect(node)}><span className="relay-node-icon" aria-hidden="true">{node.type === "agent" ? "✦" : node.type === "gate" ? "◇" : "▤"}</span><span className="relay-node-copy"><b>{node.name}</b><small>{node.type}</small></span><i className="relay-node-status" /><span className="relay-node-metric"><b>{node.metric}</b><small>{node.parentNodeId ? "execution environment" : evidenceCaption(node)}</small></span></button>)}</div></div>;
 }
 
 function VisualizeOverlay({ graph, title, onClose, onSelect }: { graph: ReturnType<typeof graphFor>; title: string; onClose: () => void; onSelect: (node: PositionedWorkflowNode) => void }) {
@@ -742,7 +786,7 @@ function WorkflowControlCenter({ client, run, timeline, selectedPhase, canvasOve
   const connected = selectedNode ? graph.edges.filter((edge) => edge.fromNodeId === selectedNode.id || edge.toNodeId === selectedNode.id).length : 0;
   const inspectionOnly = actualSelectedPhase !== current;
   const artifactSet = PHASE_ARTIFACTS[actualSelectedPhase];
-  return <section className="view relay-grid-view control-center-view" aria-labelledby="workflow-title"><div className="breadcrumb"><button onClick={onBack}>Mission Control</button><span>/</span><b>{run.workflow_id ?? run.run_id}</b></div><header className="dossier-head relay-head"><div><div className="title-line"><h1 id="workflow-title" className="dossier-title">{run.workflow_id ?? "Planning run"}</h1><Pill status={run.status} /></div><p className="mono">Flow ID {run.run_id} · submitted {new Date(run.submitted_at).toLocaleString()}</p></div><div className="d-kpis"><Kpi label="Evidence" value={run.artifacts.length} /><Kpi label="Stages" value={graph.nodes.length} /><Kpi label="Gate" value={run.active_gate ?? "none"} /><Kpi label="Scope" value={run.project_id} /></div></header>{canonicalPhases.length > 0 && <section className="lifecycle-rail" aria-labelledby="lifecycle-rail-title"><div className="lifecycle-rail-heading"><p id="lifecycle-rail-title">Lifecycle</p><small>Choose a phase to inspect its main artifact.</small></div><div className="lifecycle-rail-scroll"><ol>{canonicalPhases.map((node, index) => { const phase = phaseIdFor(node); return <li key={node.id} className={statusTone(node.status)}><button aria-label={`Focus ${node.name}`} aria-pressed={actualSelectedPhase === phase} onClick={() => phase && onSelectPhase(phase)}><span className="lifecycle-step">{index + 1}</span><span className="lifecycle-copy"><b>{node.name}</b><small>{statusLabel(node.status)}</small></span><i className="lifecycle-dot" /></button>{index < canonicalPhases.length - 1 && <span className="lifecycle-link" aria-hidden="true" />}</li>; })}</ol></div><button className="topology-mode-button" aria-label="Visualize workflow topology" onClick={onVisualize}>Visualize</button></section>}<section className="workflow-control-center" aria-labelledby="workflow-control-center-title"><header className="workflow-control-heading"><div><p className="eyebrow">Workflow operator console</p><h2 id="workflow-control-center-title">Workflow control center</h2><p>Inspect phase evidence, review durable audit activity, and act only on the authoritative workflow phase.</p></div><Pill status={selectedNode?.status ?? run.status} label={selectedNode ? `${selectedNode.name} · ${statusLabel(selectedNode.status)}` : statusLabel(run.status)} /></header>{decisionNotice && <p className="sync-row" role="status">{decisionNotice}</p>}{selectedNode && <section className="phase-context" aria-label="Selected workflow phase"><div><p className="eyebrow">Selected phase</p><h3>{selectedNode.name}</h3><p>{selectedNode.reason}</p></div><dl><div><dt>Phase type</dt><dd>{selectedNode.type}</dd></div><div><dt>State source</dt><dd>{selectedNode.availability}</dd></div><div><dt>Evidence</dt><dd>{selectedNode.artifactKind ?? "Unavailable"}</dd></div><div><dt>Connected phases</dt><dd>{connected}</dd></div></dl></section>}<WorkflowSpecificationWorkspace key={actualSelectedPhase} client={client} run={run} initial={selectedNode?.artifactKind ?? undefined} heading={actualSelectedPhase === "work_specification" ? "Work Specification" : selectedNode ? `${selectedNode.name} artifact` : "Workflow artifact"} onComplete={onRefresh} onDecisionComplete={onDecisionComplete} artifactSet={artifactSet} actionable={!inspectionOnly} />{!inspectionOnly && <ImplementationRedriveControls client={client} run={run} onComplete={onRefresh} />}{inspectionOnly && <p className="workflow-selection-note">You are browsing evidence for {selectedNode?.name}. Decisions are intentionally hidden; the authoritative current phase is {current.replaceAll("_", " ")}.</p>}<section className="activity-ledger workflow-audit" aria-labelledby="workflow-audit-title"><div className="section-heading"><div><p className="eyebrow">Centralized audit log</p><h3 id="workflow-audit-title">Workflow audit activity</h3></div><small>Lifecycle and agent execution events are kept in a reviewable operator table.</small></div><Timeline client={client} runId={run.run_id} events={timeline} title="Audit activity" failureSummary={run.failure_summary} /></section></section>{canvasOverlayOpen && <VisualizeOverlay graph={graph} title={run.workflow_id ?? run.run_id} onClose={onCloseVisualize} onSelect={(node) => { const phase = phaseIdFor(node); if (phase) onSelectPhase(phase); else onCloseVisualize(); }} />}</section>;
+  return <section className="view relay-grid-view control-center-view" aria-labelledby="workflow-title"><div className="breadcrumb"><button onClick={onBack}>Mission Control</button><span>/</span><b>{run.workflow_id ?? run.run_id}</b></div><header className="dossier-head relay-head"><div><div className="title-line"><h1 id="workflow-title" className="dossier-title">{run.workflow_id ?? "Planning run"}</h1><Pill status={run.status} /></div><p className="mono">Flow ID {run.run_id} · submitted {new Date(run.submitted_at).toLocaleString()}</p></div><div className="d-kpis"><Kpi label="Evidence" value={run.artifacts.length} /><Kpi label="Stages" value={graph.nodes.length} /><Kpi label="Gate" value={run.active_gate ?? "none"} /><Kpi label="Scope" value={run.project_id} /></div></header>{canonicalPhases.length > 0 && <section className="lifecycle-rail" aria-labelledby="lifecycle-rail-title"><div className="lifecycle-rail-heading"><p id="lifecycle-rail-title">Lifecycle</p><small>Choose a phase to inspect its main artifact.</small></div><div className="lifecycle-rail-scroll"><ol>{canonicalPhases.map((node, index) => { const phase = phaseIdFor(node); return <li key={node.id} className={statusTone(node.status)}><button aria-label={`Focus ${node.name}`} aria-pressed={actualSelectedPhase === phase} onClick={() => phase && onSelectPhase(phase)}><span className="lifecycle-step">{index + 1}</span><span className="lifecycle-copy"><b>{node.name}</b><small>{statusLabel(node.status)}</small></span><i className="lifecycle-dot" /></button>{index < canonicalPhases.length - 1 && <span className="lifecycle-link" aria-hidden="true" />}</li>; })}</ol></div><button className="topology-mode-button" aria-label="Visualize workflow topology" onClick={onVisualize}>Visualize</button></section>}<section className="workflow-control-center" aria-labelledby="workflow-control-center-title"><header className="workflow-control-heading"><div><p className="eyebrow">Workflow operator console</p><h2 id="workflow-control-center-title">Workflow control center</h2><p>Inspect phase evidence, review durable audit activity, and act only on the authoritative workflow phase.</p></div><Pill status={selectedNode?.status ?? run.status} label={selectedNode ? `${selectedNode.name} · ${statusLabel(selectedNode.status)}` : statusLabel(run.status)} /></header>{decisionNotice && <p className="sync-row" role="status">{decisionNotice}</p>}{selectedNode && <section className="phase-context" aria-label="Selected workflow phase"><div><p className="eyebrow">Selected phase</p><h3>{selectedNode.name}</h3><p>{selectedNode.reason}</p></div><dl><div><dt>Phase type</dt><dd>{selectedNode.type}</dd></div><div><dt>State source</dt><dd>{selectedNode.availability}</dd></div><div><dt>Evidence</dt><dd>{selectedNode.artifactKind ?? "Unavailable"}</dd></div><div><dt>Connected phases</dt><dd>{connected}</dd></div></dl></section>}<WorkflowSpecificationWorkspace key={actualSelectedPhase} client={client} run={run} initial={selectedNode?.artifactKind ?? undefined} heading={actualSelectedPhase === "work_specification" ? "Work Specification" : selectedNode ? `${selectedNode.name} artifact` : "Workflow artifact"} onComplete={onRefresh} onDecisionComplete={onDecisionComplete} phase={actualSelectedPhase} artifactSet={artifactSet} actionable={!inspectionOnly} />{!inspectionOnly && <ImplementationRedriveControls client={client} run={run} onComplete={onRefresh} />}{inspectionOnly && <p className="workflow-selection-note">You are browsing evidence for {selectedNode?.name}. Decisions are intentionally hidden; the authoritative current phase is {current.replaceAll("_", " ")}.</p>}<section className="activity-ledger workflow-audit" aria-labelledby="workflow-audit-title"><div className="section-heading"><div><p className="eyebrow">Centralized audit log</p><h3 id="workflow-audit-title">Workflow audit activity</h3></div><small>Lifecycle and agent execution events are kept in a reviewable operator table.</small></div><Timeline client={client} runId={run.run_id} events={timeline} title="Audit activity" failureSummary={run.failure_summary} /></section></section>{canvasOverlayOpen && <VisualizeOverlay graph={graph} title={run.workflow_id ?? run.run_id} onClose={onCloseVisualize} onSelect={(node) => { const phase = phaseIdFor(node); if (phase) onSelectPhase(phase); else onCloseVisualize(); }} />}</section>;
 }
 
 function NodeDossier({ client, run, node, edges, timeline, tab, setTab, onBack, onCanvas, onRefresh, decisionNotice, onDecisionComplete }: { client: ApiClient; run: Run; node: PositionedWorkflowNode; edges: WorkflowEdge[]; timeline: TimelineEvent[]; tab: NodeDossierTab; setTab: (tab: NodeDossierTab) => void; onBack: () => void; onCanvas: () => void; onRefresh: () => Promise<void | boolean>; decisionNotice: string | null; onDecisionComplete: () => void }) {

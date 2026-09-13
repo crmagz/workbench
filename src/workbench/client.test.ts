@@ -35,10 +35,21 @@ test("requests only newer correlated output when tailing an audit event", async 
   const fetchMock = jest.fn(async () => ({ ok: true, json: async () => ({ availability: "available", lines: [], next_cursor: null, tail_cursor: "ns:2" }) } as Response));
   global.fetch = fetchMock as unknown as typeof fetch;
 
-  await apiClient.getAuditLogs("run-123", "event-456", undefined, "ns:1");
+  await apiClient.getAuditLogs("run-123", "event-456", undefined, undefined, "ns:1");
 
   expect(fetchMock).toHaveBeenCalledWith(
     "/api/cogito/api/v1/workbench/runs/run-123/timeline/event-456/logs?tail_after=ns%3A1"
+  );
+});
+
+test("scopes correlated output to its agent environment", async () => {
+  const fetchMock = jest.fn(async () => ({ ok: true, json: async () => ({ availability: "available", lines: [], next_cursor: null }) } as Response));
+  global.fetch = fetchMock as unknown as typeof fetch;
+
+  await apiClient.getAuditLogs("run-123", "event-456", "cursor", "agent-run-456");
+
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/api/cogito/api/v1/workbench/runs/run-123/timeline/event-456/logs?cursor=cursor&agent_run_id=agent-run-456"
   );
 });
 
