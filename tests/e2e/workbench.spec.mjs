@@ -53,7 +53,11 @@ test("operator decision refreshes a browser-rendered workflow control center", a
     workflow_id: "planning-run-browser-e2e-revision-1",
     stages,
     workflow_graph: {
-      nodes: stages.map((stage) => ({ ...stage, node_type: stage.stage_id.includes("approval") ? "gate" : stage.stage_id === "specification" ? "queue" : "agent" })),
+      nodes: [
+        ...stages.filter((stage) => stage.stage_id !== "implementation").map((stage) => ({ ...stage, node_type: stage.stage_id.includes("approval") ? "gate" : stage.stage_id === "specification" ? "queue" : "agent" })),
+        { stage_id: "python-environment", label: "Python coding agent", state: "completed", availability: "authoritative", reason: "Scaffold complete.", artifact_kind: "plan", node_type: "agent", parent_node_id: "implementation", agent_role: "python-coding-agent", metric: "3 phases" },
+        { stage_id: "review-environment", label: "Adversarial review agent", state: "in_progress", availability: "authoritative", reason: "Review running.", artifact_kind: "plan", node_type: "agent", parent_node_id: "implementation", agent_role: "adversarial-review-agent", metric: "2 rounds" }
+      ],
       edges: [
         { source_node_id: "specification", target_node_id: "product_specification", style: "solid", emphasis: "primary" },
         { source_node_id: "product_specification", target_node_id: "planning", style: "solid", emphasis: "primary" },
@@ -71,6 +75,7 @@ test("operator decision refreshes a browser-rendered workflow control center", a
     approval_history: detail ? [{ decision_id: "decision-browser-e2e", gate: "plan", decision: "approve", artifact_sha256: digest, actor_id: "operator-browser", created_at: now, delivered: true }] : [],
     execution: detail ? { phase_count: 2, succeeded_phase_count: 2, failed_phase_count: 0, verification_passed: 2, verification_failed: 0, review_status: "converged", validation_status: "passed" } : null,
     external_links: detail ? [{ kind: "repository", label: "Repository", url: "https://github.com/acme/api-gateway" }] : [],
+    delivered_pull_requests: [{ repository: "crmagz/atlas-ingest", number: 42, title: "Add import validation", url: "https://github.com/crmagz/atlas-ingest/pull/42", checks: "passed", opened_at: now, agent_role: "pull-request-agent" }],
     mcp_capabilities: { state: approved ? "approved" : "awaiting_plan_approval", pinned_grants: [mcpGrant], selected_grants: null, invocation_evidence_available: false }
     };
   };
@@ -87,7 +92,16 @@ test("operator decision refreshes a browser-rendered workflow control center", a
       }
       if (request.url === "/api/v1/workbench/runs/run-browser-e2e") return send(response, 200, run(true));
       if (request.url === "/api/v1/workbench/runs/run-browser-e2e/timeline") {
-        return send(response, 200, { items: [{ event_id: "event-browser-e2e", event_type: "plan.awaiting_approval", occurred_at: now, stage_id: "plan_approval", stage_ids: ["planning", "plan_approval"], gate: "plan", artifact_sha256: digest, decision: null, lifecycle_status: null, delivered: true, delivery_attempt_count: 1 }], revision: "timeline" }, { etag: "timeline" });
+        return send(response, 200, { items: [
+          { event_id: "event-browser-e2e", event_type: "plan.awaiting_approval", occurred_at: now, stage_id: "plan_approval", stage_ids: ["planning", "plan_approval"], gate: "plan", artifact_sha256: digest, decision: null, lifecycle_status: null, delivered: true, delivery_attempt_count: 1 },
+          { event_id: "implementation-parent", event_type: "implementation.started", activity_kind: "event", log_evidence_available: false, occurred_at: now, stage_id: "implementation", stage_ids: ["implementation"], gate: null, artifact_sha256: null, decision: null, lifecycle_status: "RUNNING", delivered: true, delivery_attempt_count: 1 },
+          { event_id: "implementation-python", event_type: "agent.completed", activity_kind: "agent", log_evidence_available: true, parent_event_id: "implementation-parent", occurred_at: now, stage_id: "implementation", stage_ids: ["implementation"], gate: null, artifact_sha256: null, decision: null, lifecycle_status: "SUCCEEDED", delivered: true, delivery_attempt_count: 1, agent_binding: { agent_run_id: "agent-run-python", registration_id: "python-coding-agent", role: "python-coding-agent", environment_id: "pod-python", attempt: 1 } },
+          { event_id: "implementation-review", event_type: "agent.completed", activity_kind: "agent", log_evidence_available: true, parent_event_id: "implementation-parent", occurred_at: now, stage_id: "implementation", stage_ids: ["implementation"], gate: null, artifact_sha256: null, decision: null, lifecycle_status: "RUNNING", delivered: true, delivery_attempt_count: 1, agent_binding: { agent_run_id: "agent-run-review", registration_id: "adversarial-review-agent", role: "adversarial-review-agent", environment_id: "pod-review", attempt: 1 } }
+        ], revision: "timeline" }, { etag: "timeline" });
+      }
+      if (requestUrl.pathname === "/api/v1/workbench/runs/run-browser-e2e/timeline/implementation-review/logs") {
+        assert.equal(requestUrl.searchParams.get("agent_run_id"), "agent-run-review");
+        return send(response, 200, { availability: "available", next_cursor: null, lines: [{ timestamp: now, stream: "stdout", message: "review environment stream" }] });
       }
       if (request.url?.startsWith(`/api/v1/workbench/runs/run-browser-e2e/evidence/plan?artifact_sha256=${digest}`)) {
         return send(response, 200, { kind: "plan", sha256: digest, content_type: "application/json", content: "{}" });
@@ -147,6 +161,11 @@ test("operator decision refreshes a browser-rendered workflow control center", a
     await expect(page.getByRole("button", { name: "Focus Plan approval" })).toBeVisible();
     await page.getByRole("button", { name: "Focus Implementation", exact: true }).click();
     await expect(page.getByRole("button", { name: "Focus Implementation", exact: true })).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByRole("link", { name: /crmagz\/atlas-ingest #42/i })).toHaveAttribute("href", "https://github.com/crmagz/atlas-ingest/pull/42");
+    await page.getByRole("button", { name: "Show agent environments" }).click();
+    await page.getByText("adversarial-review-agent").click();
+    await page.getByRole("button", { name: "View logs →" }).last().click();
+    await expect(page.getByText("review environment stream")).toBeVisible();
     await page.getByRole("button", { name: "Focus Plan approval" }).click();
     await expect(page.getByLabel("Selected workflow phase")).toContainText("Decision required.");
     await expect(page.getByRole("heading", { name: "Workflow audit activity" })).toBeVisible();

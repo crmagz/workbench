@@ -14,6 +14,7 @@ const run: Run = {
 };
 const events: TimelineEvent[] = [{ event_id: "event-1", event_type: "plan.awaiting_approval", activity_kind: "agent", actor_label: "Developer", log_evidence_available: true, occurred_at: "2026-07-26T00:00:00Z", stage_id: "plan_approval", stage_ids: ["planning", "plan_approval"], gate: "plan", artifact_sha256: digest, decision: null, lifecycle_status: null, delivered: true, delivery_attempt_count: 1 }];
 const mcpGrant = { role: "developer", server_id: "github_readonly_mcp", server_version: "1.0.0", server_manifest_sha256: "b".repeat(64), tool_name: "catalog_read", input_schema_sha256: "c".repeat(64), repository_scope: "acme/api-gateway" };
+const deliveredPullRequests = [{ repository: "crmagz/atlas-ingest", number: 42, title: "Add import validation", url: "https://github.com/crmagz/atlas-ingest/pull/42", checks: "passed" as const, opened_at: "2026-08-30T20:30:00Z", agent_role: "pull-request-agent" }];
 
 function client(overrides: Partial<ApiClient> = {}): ApiClient {
   return { listProjects: async () => [{ project_id: "default" }], getHealth: async () => true, listRuns: async () => ({ runs: [run], revision: "runs", etag: "runs", unchanged: false }), getRun: async () => run, getTimeline: async () => ({ events, revision: "timeline", etag: "timeline", unchanged: false }), getAuditLogs: async () => ({ availability: "not_available", lines: [], next_cursor: null }), getEvidence: async () => ({ content: '{"title":"verified"}', sha256: digest }), getFeedback: async () => [], recordFeedback: async () => ({ feedback_id: "feedback-1", run_id: run.run_id, intent: "note", artifact_sha256: digest, stage_id: "planning", actor_id: "operator", comment: "Recorded note", created_at: "2026-08-02T00:00:00Z" }), decide: async () => undefined, generateProductSpecification: async () => undefined, acceptProductSpecification: async () => ({ outcome: "accepted" }), cancelPlanningRun: async () => undefined, redriveImplementation: async () => undefined, evaluateProductSpecification: async () => undefined, waiveSpecificationEvaluation: async () => undefined, generatePlan: async () => undefined, selectProductSpecification: async () => undefined, reviseProductSpecification: async () => undefined, listAgents: async () => ({ agents: [], revision: "agents", etag: "agents", unchanged: false }), getAgent: async () => { throw new Error("agent unavailable"); }, listAgentInvocations: async () => ({ invocations: [], revision: "invocations", etag: "agents", unchanged: false }), getAgentInvocation: async () => { throw new Error("agent unavailable"); }, ...overrides };
@@ -47,6 +48,52 @@ test("opens a run directly in the phase-driven control center and keeps visualiz
   expect(document.body).not.toHaveClass("visualize-overlay-open");
   await waitFor(() => expect(window.location.search).toBe("?phase=specification"));
   expect(visualize).toHaveFocus();
+});
+
+test("shows frozen delivered pull requests above implementation approval evidence", async () => {
+  const approvalStages = stages.map((stage) => stage.stage_id === "implementation_approval" ? { ...stage, state: "awaiting_operator" as const } : stage);
+  const approvalRun: Run = { ...run, status: "awaiting_implementation_approval", active_gate: "implementation", delivered_pull_requests: deliveredPullRequests, stages: approvalStages, workflow_graph: { ...run.workflow_graph!, nodes: approvalStages.map((stage) => ({ ...stage, node_type: stage.stage_id.includes("approval") ? "gate" as const : stage.stage_id === "specification" ? "queue" as const : "agent" as const })) } };
+  const user = userEvent.setup();
+  render(<App client={client({ listRuns: async () => ({ runs: [approvalRun], revision: "delivery", etag: "delivery", unchanged: false }), getRun: async () => approvalRun })} />);
+
+  await user.click(await screen.findByText(approvalRun.workflow_id!));
+
+  const link = await screen.findByRole("link", { name: /crmagz\/atlas-ingest #42/i });
+  expect(link).toHaveAttribute("href", deliveredPullRequests[0].url);
+  expect(screen.getByText("Add import validation")).toBeVisible();
+  expect(screen.getByText("passed")).toBeVisible();
+  expect(screen.getByText(/frozen and bound to the implementation approval decision/i)).toBeVisible();
+  const artifactPanel = screen.getByLabelText("plan main artifact panel");
+  expect(link.compareDocumentPosition(artifactPanel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
+test("shows live delivered pull requests during implementation", async () => {
+  const implementationStages = stages.map((stage) => stage.stage_id === "implementation" ? { ...stage, state: "in_progress" as const } : stage);
+  const implementationRun: Run = { ...run, status: "implementing", active_gate: null, delivered_pull_requests: deliveredPullRequests, stages: implementationStages, workflow_graph: { ...run.workflow_graph!, nodes: implementationStages.map((stage) => ({ ...stage, node_type: stage.stage_id.includes("approval") ? "gate" as const : stage.stage_id === "specification" ? "queue" as const : "agent" as const })) } };
+  const user = userEvent.setup();
+  render(<App client={client({ listRuns: async () => ({ runs: [implementationRun], revision: "implementation", etag: "implementation", unchanged: false }), getRun: async () => implementationRun })} />);
+
+  await user.click(await screen.findByText(implementationRun.workflow_id!));
+
+  expect(await screen.findByText(/Live delivery evidence/i)).toBeVisible();
+  expect(screen.getByRole("link", { name: /crmagz\/atlas-ingest #42/i })).toBeVisible();
+});
+
+test("hides delivered changes when an older projection omits them", async () => {
+  const user = userEvent.setup();
+  render(<App client={client()} />);
+  await user.click(await screen.findByText(run.workflow_id!));
+  await user.click(screen.getByRole("button", { name: "Focus Implementation" }));
+  expect(screen.queryByRole("heading", { name: "Pull requests" })).not.toBeInTheDocument();
+});
+
+test("does not invent a checks indicator when delivery checks are unavailable", async () => {
+  const unavailableRun: Run = { ...run, delivered_pull_requests: [{ ...deliveredPullRequests[0], checks: "unavailable" }] };
+  const user = userEvent.setup();
+  render(<App client={client({ listRuns: async () => ({ runs: [unavailableRun], revision: "unavailable", etag: "unavailable", unchanged: false }), getRun: async () => unavailableRun })} />);
+  await user.click(await screen.findByText(unavailableRun.workflow_id!));
+  await user.click(screen.getByRole("button", { name: "Focus Implementation" }));
+  expect(screen.getByRole("link", { name: /crmagz\/atlas-ingest #42/i }).querySelector(".pill")).toBeNull();
 });
 
 test("keeps a legacy plan approval actionable without stage projections", async () => {
@@ -113,6 +160,50 @@ test("renders a legacy timeline envelope as a non-expandable lifecycle event", a
   expect(await screen.findByText("EVENT")).toBeVisible();
   expect(screen.getByText("Event recorded")).toBeVisible();
   expect(screen.queryByRole("button", { name: "View logs →" })).not.toBeInTheDocument();
+});
+
+test("expands separate agent environments into independently cached log streams", async () => {
+  const parent: TimelineEvent = { ...events[0], event_id: "implementation-phase", event_type: "implementation.started", activity_kind: "event", log_evidence_available: false, parent_event_id: null };
+  const first: TimelineEvent = { ...events[0], event_id: "environment-one", event_type: "agent.completed", parent_event_id: parent.event_id, agent_binding: { agent_run_id: "agent-run-1", registration_id: "python-coding-agent", role: "python-coding-agent", environment_id: "pod-one", attempt: 1 } };
+  const second: TimelineEvent = { ...first, event_id: "environment-two", agent_binding: { ...first.agent_binding!, agent_run_id: "agent-run-2", role: "adversarial-review-agent", environment_id: "pod-two" } };
+  const getAuditLogs = jest.fn<ApiClient["getAuditLogs"]>().mockImplementation(async (_run, _event, _cursor, agentRunId) => ({ availability: "available", next_cursor: null, lines: [{ timestamp: "2026-08-23T00:00:00Z", stream: "stdout", message: `${agentRunId} output` }] }));
+  const user = userEvent.setup();
+  render(<App client={client({ getTimeline: async () => ({ events: [parent, first, second], revision: "environments", etag: "environments", unchanged: false }), getAuditLogs })} />);
+
+  await user.click(await screen.findByText(run.workflow_id!));
+  await user.click(screen.getByRole("button", { name: "Show agent environments" }));
+  expect(screen.getByText("python-coding-agent")).toBeVisible();
+  expect(screen.getByText("adversarial-review-agent")).toBeVisible();
+  const expanders = screen.getAllByRole("button", { name: "View logs →" });
+  await user.click(expanders[0]);
+  await user.click(expanders[1]);
+  expect(await screen.findByText("agent-run-1 output")).toBeVisible();
+  expect(await screen.findByText("agent-run-2 output")).toBeVisible();
+  expect(getAuditLogs).toHaveBeenCalledWith(run.run_id, "environment-one", undefined, "agent-run-1", undefined);
+  expect(getAuditLogs).toHaveBeenCalledWith(run.run_id, "environment-two", undefined, "agent-run-2", undefined);
+});
+
+test("keeps redrive attempts as distinct agent environment rows", async () => {
+  const parent: TimelineEvent = { ...events[0], event_id: "implementation-phase", event_type: "implementation.started", activity_kind: "event", log_evidence_available: false, parent_event_id: null };
+  const attempts: TimelineEvent[] = [1, 2].map((attempt) => ({ ...events[0], event_id: `environment-attempt-${attempt}`, event_type: "agent.completed", parent_event_id: parent.event_id, agent_binding: { agent_run_id: `agent-run-${attempt}`, registration_id: "python-coding-agent", role: "python-coding-agent", environment_id: `pod-${attempt}`, attempt } }));
+  const user = userEvent.setup();
+  render(<App client={client({ getTimeline: async () => ({ events: [parent, ...attempts], revision: "attempts", etag: "attempts", unchanged: false }) })} />);
+
+  await user.click(await screen.findByText(run.workflow_id!));
+  await user.click(screen.getByRole("button", { name: "Show agent environments" }));
+  expect(screen.getByText(/Attempt 1 · agent.completed/)).toBeVisible();
+  expect(screen.getByText(/Attempt 2 · agent.completed/)).toBeVisible();
+});
+
+test("falls back to flat audit rows when parent event IDs are omitted", async () => {
+  const flatEvents: TimelineEvent[] = ["one", "two"].map((suffix) => ({ ...events[0], event_id: `flat-${suffix}`, event_type: "agent.completed", agent_binding: { agent_run_id: `flat-run-${suffix}`, registration_id: "python-coding-agent", role: `agent-${suffix}`, environment_id: `flat-pod-${suffix}`, attempt: 1 } }));
+  const user = userEvent.setup();
+  render(<App client={client({ getTimeline: async () => ({ events: flatEvents, revision: "flat", etag: "flat", unchanged: false }) })} />);
+
+  await user.click(await screen.findByText(run.workflow_id!));
+  expect(await screen.findByText("agent-one")).toBeVisible();
+  expect(screen.getByText("agent-two")).toBeVisible();
+  expect(screen.queryByRole("button", { name: "Show agent environments" })).not.toBeInTheDocument();
 });
 
 test("deduplicates an inclusive pagination boundary in correlated output", async () => {
@@ -812,6 +903,27 @@ test("opens an interactive computed topology overlay", async () => {
   await user.click(await screen.findByRole("button", { name: "Select Implementation" }));
   expect(screen.getByLabelText("Selected workflow phase")).toHaveTextContent("Implementation");
   expect(screen.getByText("Lifecycle")).toBeVisible();
+});
+
+test("renders agent environments as stacked relay nodes without their parent phase node", async () => {
+  const environmentNodes = [
+    ...run.workflow_graph!.nodes.filter((node) => node.stage_id !== "implementation"),
+    { stage_id: "python-environment", label: "Python coding agent", state: "completed" as const, availability: "authoritative" as const, reason: "Scaffold complete.", artifact_kind: "plan" as const, node_type: "agent" as const, parent_node_id: "implementation", agent_role: "python-coding-agent", metric: "3 phases" },
+    { stage_id: "review-environment", label: "Adversarial review agent", state: "in_progress" as const, availability: "authoritative" as const, reason: "Review running.", artifact_kind: "plan" as const, node_type: "agent" as const, parent_node_id: "implementation", agent_role: "adversarial-review-agent", metric: "2 rounds" }
+  ];
+  const environmentGraphRun: Run = { ...run, status: "implementing", active_gate: null, workflow_graph: { nodes: environmentNodes, edges: [
+    { source_node_id: "plan_approval", target_node_id: "implementation", style: "solid", emphasis: "primary" },
+    { source_node_id: "implementation", target_node_id: "implementation_approval", style: "solid", emphasis: "primary" }
+  ] } };
+  const user = userEvent.setup();
+  render(<App client={client({ listRuns: async () => ({ runs: [environmentGraphRun], revision: "relay", etag: "relay", unchanged: false }), getRun: async () => environmentGraphRun })} />);
+
+  await user.click(await screen.findByText(environmentGraphRun.workflow_id!));
+  await user.click(screen.getByRole("button", { name: "Visualize workflow topology" }));
+  expect(await screen.findByRole("button", { name: "Select Python coding agent" })).toBeVisible();
+  expect(screen.getByRole("button", { name: "Select Adversarial review agent" })).toBeVisible();
+  expect(screen.queryByRole("button", { name: "Select Implementation" })).not.toBeInTheDocument();
+  expect(screen.getByText("Implementation · agent environments")).toBeVisible();
 });
 
 test("closes the visualization when an arbitrary workflow node is selected", async () => {
