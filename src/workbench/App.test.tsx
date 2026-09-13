@@ -16,7 +16,7 @@ const events: TimelineEvent[] = [{ event_id: "event-1", event_type: "plan.awaiti
 const mcpGrant = { role: "developer", server_id: "github_readonly_mcp", server_version: "1.0.0", server_manifest_sha256: "b".repeat(64), tool_name: "catalog_read", input_schema_sha256: "c".repeat(64), repository_scope: "acme/api-gateway" };
 
 function client(overrides: Partial<ApiClient> = {}): ApiClient {
-  return { listProjects: async () => [{ project_id: "default" }], getHealth: async () => true, listRuns: async () => ({ runs: [run], revision: "runs", etag: "runs", unchanged: false }), getRun: async () => run, getTimeline: async () => ({ events, revision: "timeline", etag: "timeline", unchanged: false }), getAuditLogs: async () => ({ availability: "not_available", lines: [], next_cursor: null }), getEvidence: async () => ({ content: '{"title":"verified"}', sha256: digest }), getFeedback: async () => [], recordFeedback: async () => ({ feedback_id: "feedback-1", run_id: run.run_id, intent: "note", artifact_sha256: digest, stage_id: "planning", actor_id: "operator", comment: "Recorded note", created_at: "2026-08-02T00:00:00Z" }), decide: async () => undefined, generateProductSpecification: async () => undefined, acceptProductSpecification: async () => ({ outcome: "accepted" }), cancelPlanningRun: async () => undefined, evaluateProductSpecification: async () => undefined, waiveSpecificationEvaluation: async () => undefined, generatePlan: async () => undefined, selectProductSpecification: async () => undefined, reviseProductSpecification: async () => undefined, listAgents: async () => ({ agents: [], revision: "agents", etag: "agents", unchanged: false }), getAgent: async () => { throw new Error("agent unavailable"); }, listAgentInvocations: async () => ({ invocations: [], revision: "invocations", etag: "agents", unchanged: false }), getAgentInvocation: async () => { throw new Error("agent unavailable"); }, ...overrides };
+  return { listProjects: async () => [{ project_id: "default" }], getHealth: async () => true, listRuns: async () => ({ runs: [run], revision: "runs", etag: "runs", unchanged: false }), getRun: async () => run, getTimeline: async () => ({ events, revision: "timeline", etag: "timeline", unchanged: false }), getAuditLogs: async () => ({ availability: "not_available", lines: [], next_cursor: null }), getEvidence: async () => ({ content: '{"title":"verified"}', sha256: digest }), getFeedback: async () => [], recordFeedback: async () => ({ feedback_id: "feedback-1", run_id: run.run_id, intent: "note", artifact_sha256: digest, stage_id: "planning", actor_id: "operator", comment: "Recorded note", created_at: "2026-08-02T00:00:00Z" }), decide: async () => undefined, generateProductSpecification: async () => undefined, acceptProductSpecification: async () => ({ outcome: "accepted" }), cancelPlanningRun: async () => undefined, redriveImplementation: async () => undefined, evaluateProductSpecification: async () => undefined, waiveSpecificationEvaluation: async () => undefined, generatePlan: async () => undefined, selectProductSpecification: async () => undefined, reviseProductSpecification: async () => undefined, listAgents: async () => ({ agents: [], revision: "agents", etag: "agents", unchanged: false }), getAgent: async () => { throw new Error("agent unavailable"); }, listAgentInvocations: async () => ({ invocations: [], revision: "invocations", etag: "agents", unchanged: false }), getAgentInvocation: async () => { throw new Error("agent unavailable"); }, ...overrides };
 }
 
 beforeEach(() => { window.history.replaceState({}, "", "/"); window.localStorage.clear(); });
@@ -831,6 +831,44 @@ test("uses the authoritative graph nodes for the lifecycle rail and focuses the 
   await user.click(screen.getByRole("button", { name: "Focus Plan approval" }));
   expect(screen.getByLabelText("Selected workflow phase")).toHaveTextContent("Plan approval");
   expect(screen.getByLabelText("Selected workflow phase")).toHaveTextContent("Decision required.");
+});
+
+test("follows the authoritative lifecycle phase after a background refresh", async () => {
+  jest.useFakeTimers();
+  try {
+    const user = userEvent.setup({ advanceTimers: jest.advanceTimersByTime });
+    const implementationStages = run.stages!.map((stage) => stage.stage_id === "plan_approval"
+      ? { ...stage, state: "completed" as const, reason: "Plan approved." }
+      : stage.stage_id === "implementation"
+      ? { ...stage, state: "in_progress" as const, availability: "authoritative" as const, reason: "Developer is executing the approved plan." }
+      : stage);
+    const implementingRun: Run = {
+      ...run,
+      status: "implementing",
+      active_gate: null,
+      stages: implementationStages,
+      workflow_graph: {
+        ...run.workflow_graph!,
+        nodes: run.workflow_graph!.nodes.map((node) => ({
+          ...node,
+          ...implementationStages.find((stage) => stage.stage_id === node.stage_id)!
+        }))
+      }
+    };
+    const getRun = jest.fn<ApiClient["getRun"]>()
+      .mockResolvedValueOnce(run)
+      .mockResolvedValue(implementingRun);
+    render(<App client={client({ getRun })} />);
+
+    await user.click(await screen.findByText("run-12345678"));
+    expect(window.location.search).toBe("?phase=plan_approval");
+    await act(async () => { jest.advanceTimersByTime(3_000); });
+
+    await waitFor(() => expect(window.location.search).toBe("?phase=implementation"));
+    expect(screen.getByLabelText("Selected workflow phase")).toHaveTextContent("Implementation");
+  } finally {
+    jest.useRealTimers();
+  }
 });
 
 test("keeps a stale approval conflict visible and never claims success", async () => {
