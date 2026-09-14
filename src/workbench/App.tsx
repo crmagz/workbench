@@ -53,7 +53,7 @@ function statusTone(value: string) {
   if (normalized.includes("reject") || normalized.includes("fail")) return "err";
   if (normalized.includes("await") || normalized.includes("revision")) return "warn";
   if (normalized.includes("in_progress") || normalized.includes("planning") || normalized.includes("implementing") || normalized.includes("running")) return "active";
-  if (normalized.includes("complete") || normalized.includes("approve") || normalized.includes("succeed")) return "run";
+  if (normalized.includes("complete") || normalized.includes("approve") || normalized.includes("succeed") || normalized === "passed") return "run";
   return "idle";
 }
 function Pill({ status, label = statusLabel(status) }: { status: string; label?: string }) { return <span className={`pill ${statusTone(status)}`}><i />{label}</span>; }
@@ -278,7 +278,10 @@ function WorkflowSpecificationWorkspace({ client, run, initial, heading, onCompl
 function DeliveredChangesPanel({ run, phase }: { run: Run; phase: LifecyclePhaseId }) {
   const pullRequests = run.delivered_pull_requests ?? [];
   if (!pullRequests.length || (phase !== "implementation" && phase !== "implementation_approval")) return null;
-  const frozen = phase === "implementation_approval";
+  const implementationApproval = run.stages?.find((stage) => stage.stage_id === "implementation_approval");
+  const frozen = run.active_gate === "implementation"
+    || run.status === "awaiting_implementation_approval"
+    || implementationApproval?.state === "awaiting_operator";
   return <section className="delivered-changes" aria-labelledby="delivered-changes-title"><header><div><p className="eyebrow">Delivered changes</p><h4 id="delivered-changes-title">Pull requests</h4></div><small>{frozen ? "This set is frozen and bound to the implementation approval decision." : "Live delivery evidence — pull requests may be appended while implementation runs."}</small></header><div className="delivered-changes-list">{pullRequests.map((pullRequest) => <a key={pullRequest.url} href={pullRequest.url} target="_blank" rel="noopener noreferrer"><span className="delivered-change-repository">{pullRequest.repository} <b>#{pullRequest.number}</b></span><span className="delivered-change-title">{pullRequest.title}{pullRequest.agent_role && <small>{pullRequest.agent_role}</small>}</span><span className="delivered-change-checks">{pullRequest.checks !== "unavailable" && <Pill status={pullRequest.checks} label={pullRequest.checks === "failing" && pullRequest.failing_check_count ? `${pullRequest.failing_check_count} failing` : pullRequest.checks} />}</span><time dateTime={pullRequest.merged_at ?? pullRequest.opened_at}>{pullRequest.merged_at ? `Merged ${new Date(pullRequest.merged_at).toLocaleString()}` : `Opened ${new Date(pullRequest.opened_at).toLocaleString()}`}</time></a>)}</div></section>;
 }
 
@@ -542,11 +545,14 @@ function Timeline({ client = apiClient, runId = "", events, title = "Authoritati
   }, [events, loadLogs, loading, logs, tailing]);
   const toggle = (event: TimelineEvent) => {
     if (!event.log_evidence_available && !(childrenByParent.get(event.event_id)?.length)) return;
+    const isGroup = Boolean(childrenByParent.get(event.event_id)?.length);
     const key = auditCacheKey(event);
     const isExpanded = expanded.has(key);
     setExpanded((current) => { const next = new Set(current); if (isExpanded) next.delete(key); else next.add(key); return next; });
     if (isExpanded) setTailing((current) => { const next = new Set(current); next.delete(key); return next; });
-    if (!isExpanded && !logs[key] && !loading.has(key)) void loadLogs(event);
+    // A phase-level row only owns its child environments. It has no invocation
+    // binding and therefore no log stream of its own.
+    if (!isExpanded && !isGroup && !logs[key] && !loading.has(key)) void loadLogs(event);
   };
   const renderEvent = (event: TimelineEvent, child = false) => {
     const key = auditCacheKey(event); const children = childrenByParent.get(event.event_id) ?? [];
@@ -575,6 +581,7 @@ function graphFor(run: Run): { nodes: PositionedWorkflowNode[]; edges: WorkflowE
   const environmentChildren = new Map<string, WorkflowNode[]>();
   rawNodes.forEach((node) => { if (node.parentNodeId) environmentChildren.set(node.parentNodeId, [...(environmentChildren.get(node.parentNodeId) ?? []), node]); });
   const sourceNodes = rawNodes.filter((node) => !environmentChildren.has(node.id));
+  const sourceNodeById = new Map(sourceNodes.map((node) => [node.id, node]));
   const firstChild = (id: string) => environmentChildren.get(id)?.[0]?.id ?? id;
   const lastChild = (id: string) => environmentChildren.get(id)?.at(-1)?.id ?? id;
   const edges: WorkflowEdge[] = graph ? graph.edges.map((edge) => ({
@@ -582,30 +589,37 @@ function graphFor(run: Run): { nodes: PositionedWorkflowNode[]; edges: WorkflowE
   })) : sourceNodes.slice(1).map((node, index) => ({ fromNodeId: sourceNodes[index].id, toNodeId: node.id, style: "solid", emphasis: "primary" }));
   environmentChildren.forEach((children) => children.slice(1).forEach((child, index) => edges.push({ fromNodeId: children[index].id, toNodeId: child.id, style: "dashed", emphasis: "secondary" })));
   const NODE_W = 200, NODE_H = 128, COL_GAP = 90, ROW_GAP = 24, PAD = 44;
-  const incoming = new Map(sourceNodes.map((node) => [node.id, 0]));
-  const outgoing = new Map(sourceNodes.map((node) => [node.id, [] as string[]]));
-  edges.forEach((edge) => { incoming.set(edge.toNodeId, (incoming.get(edge.toNodeId) ?? 0) + 1); outgoing.get(edge.fromNodeId)?.push(edge.toNodeId); });
-  const rank = new Map<string, number>(); const queue = sourceNodes.filter((node) => incoming.get(node.id) === 0);
-  queue.forEach((node) => rank.set(node.id, 0));
-  for (let index = 0; index < queue.length; index += 1) {
-    const current = queue[index]; const currentRank = rank.get(current.id) ?? 0;
-    for (const nextId of outgoing.get(current.id) ?? []) { rank.set(nextId, Math.max(rank.get(nextId) ?? 0, currentRank + 1)); incoming.set(nextId, (incoming.get(nextId) ?? 1) - 1); if (incoming.get(nextId) === 0) { const next = sourceNodes.find((node) => node.id === nextId); if (next) queue.push(next); } }
+  // Rank each environment stack as one logical phase. The rendered child-to-child
+  // connectors are deliberately excluded here, otherwise they shift downstream
+  // phases after the stack and can extend beyond the canvas width.
+  const rankKey = (id: string) => sourceNodeById.get(id)?.parentNodeId ?? id;
+  const logicalNodeIds = [...new Set(sourceNodes.map((node) => rankKey(node.id)))];
+  const incoming = new Map(logicalNodeIds.map((id) => [id, 0]));
+  const outgoing = new Map(logicalNodeIds.map((id) => [id, [] as string[]]));
+  edges.forEach((edge) => {
+    const from = rankKey(edge.fromNodeId); const to = rankKey(edge.toNodeId);
+    if (from === to) return;
+    incoming.set(to, (incoming.get(to) ?? 0) + 1);
+    outgoing.get(from)?.push(to);
+  });
+  const rank = new Map<string, number>();
+  const logicalQueue = logicalNodeIds.filter((id) => incoming.get(id) === 0);
+  logicalQueue.forEach((id) => rank.set(id, 0));
+  for (let index = 0; index < logicalQueue.length; index += 1) {
+    const current = logicalQueue[index]; const currentRank = rank.get(current) ?? 0;
+    for (const nextId of outgoing.get(current) ?? []) { rank.set(nextId, Math.max(rank.get(nextId) ?? 0, currentRank + 1)); incoming.set(nextId, (incoming.get(nextId) ?? 1) - 1); if (incoming.get(nextId) === 0) logicalQueue.push(nextId); }
   }
   // DAG nodes get their longest-path-from-source rank. For a malformed cycle,
   // give each unresolved node a deterministic trailing rank so no cards overlap.
   let fallbackRank = Math.max(0, ...rank.values()) + 1;
-  sourceNodes.forEach((node) => { if (!rank.has(node.id)) rank.set(node.id, fallbackRank++); });
-  environmentChildren.forEach((children) => {
-    const groupRank = rank.get(children[0].id) ?? 0;
-    children.forEach((child) => rank.set(child.id, groupRank));
-  });
+  logicalNodeIds.forEach((id) => { if (!rank.has(id)) rank.set(id, fallbackRank++); });
   const layers = new Map<number, WorkflowNode[]>();
-  sourceNodes.forEach((node) => { const nodeRank = rank.get(node.id) ?? 0; layers.set(nodeRank, [...(layers.get(nodeRank) ?? []), node]); });
+  sourceNodes.forEach((node) => { const nodeRank = rank.get(rankKey(node.id)) ?? 0; layers.set(nodeRank, [...(layers.get(nodeRank) ?? []), node]); });
   const maxRankHeight = Math.max(NODE_H, ...[...layers.values()].map((layer) => layer.length * NODE_H + Math.max(0, layer.length - 1) * ROW_GAP));
-  const rankCount = Math.max(1, layers.size);
+  const rankCount = Math.max(1, ...rank.values()) + 1;
   const height = PAD * 2 + maxRankHeight; const width = PAD * 2 + rankCount * NODE_W + Math.max(0, rankCount - 1) * COL_GAP;
   const nodes = sourceNodes.map((node) => {
-    const nodeRank = rank.get(node.id) ?? 0; const layer = layers.get(nodeRank) ?? [node]; const slot = layer.findIndex((item) => item.id === node.id);
+    const nodeRank = rank.get(rankKey(node.id)) ?? 0; const layer = layers.get(nodeRank) ?? [node]; const slot = layer.findIndex((item) => item.id === node.id);
     const layerHeight = layer.length * NODE_H + Math.max(0, layer.length - 1) * ROW_GAP;
     const y = PAD + (maxRankHeight - layerHeight) / 2 + slot * (NODE_H + ROW_GAP);
     return { ...node, position: { x: PAD + nodeRank * (NODE_W + COL_GAP), y, width: NODE_W } };
@@ -744,6 +758,18 @@ function phaseIdFor(node: PositionedWorkflowNode): LifecyclePhaseId | null {
   return allLifecyclePhaseIds.includes(phaseId as LifecyclePhaseId) ? phaseId as LifecyclePhaseId : null;
 }
 
+function parentPhaseForGraphNode(graph: ReturnType<typeof graphFor>, nodeId: string) {
+  return graph.nodes.find((node) => node.id === nodeId)?.parentNodeId ?? nodeId;
+}
+
+function phaseConnectionCount(graph: ReturnType<typeof graphFor>, phase: string) {
+  return graph.edges.filter((edge) => {
+    const source = parentPhaseForGraphNode(graph, edge.fromNodeId);
+    const target = parentPhaseForGraphNode(graph, edge.toNodeId);
+    return source !== target && (source === phase || target === phase);
+  }).length;
+}
+
 const lifecycleStatusPriority: Record<PositionedWorkflowNode["status"], number> = {
   in_progress: 0,
   awaiting_operator: 1,
@@ -764,7 +790,11 @@ function lifecyclePhaseNode(graph: ReturnType<typeof graphFor>, run: Run, phase:
   // canvas, but the lifecycle rail must preserve its authoritative state during
   // the hand-off between those environments.
   const graphNode = run.workflow_graph?.nodes.find((node) => node.stage_id === phase);
-  const serverNode = graphNode ?? run.stages?.find((stage) => stage.stage_id === phase);
+  const environments = graph.nodes.filter((node) => node.parentNodeId === phase);
+  // Prefer a graph parent when the server provides one. When the rolling API
+  // projection contains only environment children, aggregate those before an
+  // unavailable stage fallback can hide active work.
+  const serverNode = graphNode ?? (environments.length ? null : run.stages?.find((stage) => stage.stage_id === phase));
   if (serverNode) {
     return {
       id: serverNode.stage_id,
@@ -783,7 +813,6 @@ function lifecyclePhaseNode(graph: ReturnType<typeof graphFor>, run: Run, phase:
   // their agent environments are shown as a stacked sequence. The lifecycle
   // rail still needs one truthful phase state, so project the most active child
   // environment back onto its parent phase without inventing any API facts.
-  const environments = graph.nodes.filter((node) => node.parentNodeId === phase);
   if (!environments.length) return null;
   const representative = [...environments].sort((left, right) => lifecycleStatusPriority[left.status] - lifecycleStatusPriority[right.status])[0];
   return {
@@ -814,10 +843,9 @@ function currentPhaseId(graph: ReturnType<typeof graphFor>, run: Run): Lifecycle
   // rendered relay nodes. The relay intentionally omits parent nodes when it
   // displays environment stacks, which must never make an in-progress parent
   // appear to return to Work Specification between Discovery and Planner.
-  const serverNodes = run.workflow_graph?.nodes ?? run.stages ?? [];
   const canonicalNodes = lifecyclePhasesFor(run).flatMap((phase) => {
-    const node = serverNodes.find((candidate) => candidate.stage_id === phase);
-    return node ? [{ phase, state: node.state }] : [];
+    const node = lifecyclePhaseNode(graph, run, phase);
+    return node ? [{ phase, state: node.status }] : [];
   });
   for (const state of ["in_progress", "queued", "awaiting_operator", "needs_revision", "failed"] as const) {
     const active = canonicalNodes.find((node) => node.state === state);
@@ -861,7 +889,7 @@ function WorkflowControlCenter({ client, run, timeline, selectedPhase, canvasOve
   const current = currentPhaseId(graph, run);
   const selectedNode = canonicalPhases.find((node) => node.id === selectedPhase) ?? canonicalPhases[0] ?? null;
   const actualSelectedPhase = selectedNode ? phaseIdFor(selectedNode) ?? selectedPhase : selectedPhase;
-  const connected = selectedNode ? graph.edges.filter((edge) => edge.fromNodeId === selectedNode.id || edge.toNodeId === selectedNode.id).length : 0;
+  const connected = selectedNode ? phaseConnectionCount(graph, selectedNode.id) : 0;
   const inspectionOnly = actualSelectedPhase !== current;
   const artifactSet = PHASE_ARTIFACTS[actualSelectedPhase];
   return <section className="view relay-grid-view control-center-view" aria-labelledby="workflow-title"><div className="breadcrumb"><button onClick={onBack}>Mission Control</button><span>/</span><b>{run.workflow_id ?? run.run_id}</b></div><header className="dossier-head relay-head"><div><div className="title-line"><h1 id="workflow-title" className="dossier-title">{run.workflow_id ?? "Planning run"}</h1><Pill status={run.status} /></div><p className="mono">Flow ID {run.run_id} · submitted {new Date(run.submitted_at).toLocaleString()}</p></div><div className="d-kpis"><Kpi label="Evidence" value={run.artifacts.length} /><Kpi label="Stages" value={graph.nodes.length} /><Kpi label="Gate" value={run.active_gate ?? "none"} /><Kpi label="Scope" value={run.project_id} /></div></header>{canonicalPhases.length > 0 && <section className="lifecycle-rail" aria-labelledby="lifecycle-rail-title"><div className="lifecycle-rail-heading"><p id="lifecycle-rail-title">Lifecycle</p><small>Choose a phase to inspect its main artifact.</small></div><div className="lifecycle-rail-scroll"><ol>{canonicalPhases.map((node, index) => { const phase = phaseIdFor(node); return <li key={node.id} className={statusTone(node.status)}><button aria-label={`Focus ${node.name}`} aria-pressed={actualSelectedPhase === phase} onClick={() => phase && onSelectPhase(phase)}><span className="lifecycle-step">{index + 1}</span><span className="lifecycle-copy"><b>{node.name}</b><small>{statusLabel(node.status)}</small></span><i className="lifecycle-dot" /></button>{index < canonicalPhases.length - 1 && <span className="lifecycle-link" aria-hidden="true" />}</li>; })}</ol></div><button className="topology-mode-button" aria-label="Visualize workflow topology" onClick={onVisualize}>Visualize</button></section>}<section className="workflow-control-center" aria-labelledby="workflow-control-center-title"><header className="workflow-control-heading"><div><p className="eyebrow">Workflow operator console</p><h2 id="workflow-control-center-title">Workflow control center</h2><p>Inspect phase evidence, review durable audit activity, and act only on the authoritative workflow phase.</p></div><Pill status={selectedNode?.status ?? run.status} label={selectedNode ? `${selectedNode.name} · ${statusLabel(selectedNode.status)}` : statusLabel(run.status)} /></header>{decisionNotice && <p className="sync-row" role="status">{decisionNotice}</p>}{selectedNode && <section className="phase-context" aria-label="Selected workflow phase"><div><p className="eyebrow">Selected phase</p><h3>{selectedNode.name}</h3><p>{selectedNode.reason}</p></div><dl><div><dt>Phase type</dt><dd>{selectedNode.type}</dd></div><div><dt>State source</dt><dd>{selectedNode.availability}</dd></div><div><dt>Evidence</dt><dd>{selectedNode.artifactKind ?? "Unavailable"}</dd></div><div><dt>Connected phases</dt><dd>{connected}</dd></div></dl></section>}<WorkflowSpecificationWorkspace key={actualSelectedPhase} client={client} run={run} initial={selectedNode?.artifactKind ?? undefined} heading={actualSelectedPhase === "work_specification" ? "Work Specification" : selectedNode ? `${selectedNode.name} artifact` : "Workflow artifact"} onComplete={onRefresh} onDecisionComplete={onDecisionComplete} phase={actualSelectedPhase} artifactSet={artifactSet} actionable={!inspectionOnly} />{!inspectionOnly && <ImplementationRedriveControls client={client} run={run} onComplete={onRefresh} />}{inspectionOnly && <p className="workflow-selection-note">You are browsing evidence for {selectedNode?.name}. Decisions are intentionally hidden; the authoritative current phase is {current.replaceAll("_", " ")}.</p>}<section className="activity-ledger workflow-audit" aria-labelledby="workflow-audit-title"><div className="section-heading"><div><p className="eyebrow">Centralized audit log</p><h3 id="workflow-audit-title">Workflow audit activity</h3></div><small>Lifecycle and agent execution events are kept in a reviewable operator table.</small></div><Timeline client={client} runId={run.run_id} events={timeline} title="Audit activity" failureSummary={run.failure_summary} /></section></section>{canvasOverlayOpen && <VisualizeOverlay graph={graph} title={run.workflow_id ?? run.run_id} onClose={onCloseVisualize} onSelect={(node) => { const phase = phaseIdFor(node); if (phase) onSelectPhase(phase); else onCloseVisualize(); }} />}</section>;
@@ -951,7 +979,10 @@ export function App({ client = apiClient }: { client?: ApiClient }) {
   const selectedRun = selected ?? runs.find((run) => run.run_id === routeRunId) ?? null;
   const refreshSelected = useCallback(async (): Promise<boolean> => { if (!selectedRun) return false; const refreshed = await refreshDetail(selectedRun.run_id, true); if (refreshed) void refreshTimeline(selectedRun.run_id); return refreshed; }, [refreshDetail, refreshTimeline, selectedRun]);
   const graph = selectedRun ? graphFor(selectedRun) : null;
-  const selectedNode = graph?.nodes.find((node) => node.id === nodeId) ?? null;
+  const selectedNode = graph?.nodes.find((node) => node.id === nodeId)
+    ?? (selectedRun && graph && nodeId && allLifecyclePhaseIds.includes(nodeId as LifecyclePhaseId)
+      ? lifecyclePhaseNode(graph, selectedRun, nodeId as LifecyclePhaseId)
+      : null);
   const content = useMemo(() => surface === "agents" ? <AgentOperations client={client} projectId={selectedProject} onOpenWorkflow={openInvocationWorkflow} /> : selectedRun && routeView === "control-center" ? <WorkflowControlCenter client={client} run={selectedRun} timeline={timelineRunId === selectedRun.run_id ? timeline : []} selectedPhase={selectedPhase ?? currentPhaseId(graphFor(selectedRun), selectedRun)} canvasOverlayOpen={canvasOverlayOpen} onBack={back} onSelectPhase={setControlCenterPhase} onVisualize={openVisualization} onCloseVisualize={closeVisualization} onRefresh={refreshSelected} decisionNotice={decisionNotice} onDecisionComplete={() => setDecisionNotice("Decision accepted; canonical state has been refreshed.")} /> : selectedRun && routeView === "canvas" ? <WorkflowCanvas client={client} run={selectedRun} timeline={timelineRunId === selectedRun.run_id ? timeline : []} onBack={back} onRefresh={refreshSelected} decisionNotice={decisionNotice} onDecisionComplete={() => setDecisionNotice("Decision accepted; canonical state has been refreshed.")} /> : selectedRun && routeView === "node" && selectedNode && graph ? <NodeDossier client={client} run={selectedRun} node={selectedNode} edges={graph.edges} timeline={timelineRunId === selectedRun.run_id ? timeline : []} tab={nodeTab} setTab={setDossierTab} onBack={back} onCanvas={backToCanvas} onRefresh={refreshSelected} decisionNotice={decisionNotice} onDecisionComplete={() => setDecisionNotice("Decision accepted; canonical state has been refreshed.")} /> : selectedRun && routeView === "node" ? <UnavailableRun onBack={backToCanvas} entity="Node" /> : selectedRun && routeView === "legacy" ? <Detail client={client} run={selectedRun} tab={tab} setTab={setTab} timeline={timelineRunId === selectedRun.run_id ? timeline : []} timelineMessage={timelineRunId === selectedRun.run_id ? timelineMessage : "Loading scoped timeline…"} onBack={back} onRefresh={refreshSelected} decisionNotice={decisionNotice} onDecisionComplete={() => setDecisionNotice("Decision accepted; canonical state has been refreshed.")} /> : routeRunId && routeUnavailable ? <UnavailableRun onBack={back} /> : <MissionControl runs={runs} onOpen={openCanvas} refresh={refresh} refreshing={refreshing} syncMessage={syncMessage} />, [back, backToCanvas, canvasOverlayOpen, client, closeVisualization, decisionNotice, graph, nodeTab, openInvocationWorkflow, openVisualization, refreshSelected, routeRunId, routeUnavailable, routeView, runs, selectedNode, selectedPhase, selectedProject, selectedRun, setControlCenterPhase, setDossierTab, surface, syncMessage, tab, timeline, timelineMessage, timelineRunId]);
   return <main className="app-shell" data-theme={theme}><Sidebar projects={projects} selectedProject={selectedProject} setSelectedProject={selectProject} health={health} theme={theme} setTheme={setTheme} activeNav={surface === "mission" ? "mission" : "agents"} onRuns={() => { setSurface("mission"); back(); }} onAgents={openAgentCatalog} /><div className="main-content">{error && <p className="app-error" role="alert">{error}</p>}{content}</div></main>;
 }
