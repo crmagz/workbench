@@ -65,6 +65,8 @@ test("shows frozen delivered pull requests above implementation approval evidenc
   expect(screen.getByText(/frozen and bound to the implementation approval decision/i)).toBeVisible();
   const artifactPanel = screen.getByLabelText("plan main artifact panel");
   expect(link.compareDocumentPosition(artifactPanel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  await user.click(screen.getByRole("button", { name: "Focus Implementation" }));
+  expect(screen.getByText(/frozen and bound to the implementation approval decision/i)).toBeVisible();
 });
 
 test("shows live delivered pull requests during implementation", async () => {
@@ -77,6 +79,8 @@ test("shows live delivered pull requests during implementation", async () => {
 
   expect(await screen.findByText(/Live delivery evidence/i)).toBeVisible();
   expect(screen.getByRole("link", { name: /crmagz\/atlas-ingest #42/i })).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "Focus Implementation approval" }));
+  expect(screen.getByText(/Live delivery evidence/i)).toBeVisible();
 });
 
 test("hides delivered changes when an older projection omits them", async () => {
@@ -172,6 +176,7 @@ test("expands separate agent environments into independently cached log streams"
 
   await user.click(await screen.findByText(run.workflow_id!));
   await user.click(screen.getByRole("button", { name: "Show agent environments" }));
+  expect(getAuditLogs).not.toHaveBeenCalled();
   expect(screen.getByText("python-coding-agent")).toBeVisible();
   expect(screen.getByText("adversarial-review-agent")).toBeVisible();
   expect(screen.getByRole("button", { name: "Hide agent environments" })).toHaveClass("audit-environments-expand");
@@ -984,9 +989,14 @@ test("renders agent environments as stacked relay nodes without their parent pha
   render(<App client={client({ listRuns: async () => ({ runs: [environmentGraphRun], revision: "relay", etag: "relay", unchanged: false }), getRun: async () => environmentGraphRun })} />);
 
   await user.click(await screen.findByText(environmentGraphRun.workflow_id!));
+  await user.click(screen.getByRole("button", { name: "Focus Implementation" }));
+  expect(screen.getByLabelText("Selected workflow phase")).toHaveTextContent("Connected phases2");
   await user.click(screen.getByRole("button", { name: "Visualize workflow topology" }));
   expect(await screen.findByRole("button", { name: "Select Python coding agent" })).toBeVisible();
   expect(screen.getByRole("button", { name: "Select Adversarial review agent" })).toBeVisible();
+  const canvas = screen.getByRole("button", { name: "Select Implementation approval" }).closest(".relay-grid-canvas");
+  const approval = screen.getByRole("button", { name: "Select Implementation approval" });
+  expect(Number.parseFloat(approval.style.left)).toBeLessThan(Number.parseFloat(canvas?.getAttribute("style")?.match(/width: ([0-9.]+)px/)?.[1] ?? "0"));
   expect(screen.queryByRole("button", { name: "Select Implementation" })).not.toBeInTheDocument();
   expect(screen.getByText("Implementation · agent environments")).toBeVisible();
 });
