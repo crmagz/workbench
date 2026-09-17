@@ -450,3 +450,13 @@ body.visualize-overlay-open { overflow:hidden; overscroll-behavior:none; }
 .specification-format-tabs button[aria-pressed="true"] { color:#00d4ff; background:rgba(0,212,255,.15); }
 @media (max-width:1100px) { .audit-timeline .timeline { grid-template-columns:var(--audit-status-column,132px) 64px minmax(120px,.75fr) minmax(160px,1fr) auto; }.audit-column-headings span:nth-child(5),.audit-event-occurred { display:none; } }
 @media (max-width:700px) { .audit-event-row { grid-template-columns:max-content max-content minmax(0,1fr) max-content; }.audit-event-primary { grid-column:3; }.audit-event-row .audit-expand,.audit-evidence-unavailable { grid-column:4; grid-row:1; } .visualize-dialog > header { padding:14px 16px; }.visualize-canvas-body { padding:0 16px 16px; } }
+
+/* Phase stacks retain the relay cards and scroll at their native size. */
+.relay-phase-stacks .relay-grid-node { height:128px; }
+.relay-phase-stacks .relay-node-copy { min-width:0; overflow-wrap:anywhere; }
+.relay-environment-group { --phase-tone:var(--idle); border-color:color-mix(in srgb,var(--phase-tone) 35%,transparent); background:color-mix(in srgb,var(--phase-tone) 4%,transparent); }
+.relay-environment-group.run { --phase-tone:var(--ok); }
+.relay-environment-group.active { --phase-tone:var(--accent); }
+.relay-environment-group.warn { --phase-tone:var(--warn); }
+.relay-environment-group.err { --phase-tone:var(--err); }
+.relay-phase-stacks .relay-grid-node.active .relay-node-status { background:var(--accent); box-shadow:0 0 6px var(--accent); }
