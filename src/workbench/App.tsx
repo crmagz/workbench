@@ -26,10 +26,10 @@ const allLifecyclePhaseIds: LifecyclePhaseId[] = [...lifecyclePhaseIds, "specifi
 function lifecyclePhasesFor(run: Run): LifecyclePhaseId[] {
   return run.stages?.some((stage) => stage.stage_id === "work_specification") ? lifecyclePhaseIds : legacyLifecyclePhaseIds;
 }
-type WorkflowNode = { id: string; name: string; type: "agent" | "gate" | "queue"; status: string; availability: Stage["availability"]; artifactKind: Artifact["kind"] | null; reason: string; position?: { x: number; y: number; width: number }; metric: string; parentNodeId?: string | null };
+type WorkflowNode = { id: string; name: string; type: "agent" | "gate" | "queue"; status: string; availability: Stage["availability"]; artifactKind: Artifact["kind"] | null; reason: string; position?: { x: number; y: number; width: number }; metric: string; parentNodeId?: string | null; agentRole?: string | null };
 type WorkflowEdge = { fromNodeId: string; toNodeId: string; style: "solid" | "dashed"; emphasis: "primary" | "secondary" };
 type PositionedWorkflowNode = WorkflowNode & { position: { x: number; y: number; width: number } };
-type RelayEnvironmentGroup = { id: string; label: string; position: { x: number; y: number; width: number; height: number } };
+type RelayEnvironmentGroup = { id: string; label: string; status: string; position: { x: number; y: number; width: number; height: number } };
 type RouteState = { runId: string | null; tab: DetailTab; nodeId: string | null; nodeTab: NodeDossierTab; view: WorkflowView; selectedPhase: LifecyclePhaseId | null; canvasOverlayOpen: boolean; agents: boolean; agentProjectId: string | null };
 type CatalogColumnId = "agent" | "version" | "role" | "capabilities" | "owner" | "model" | "budget" | "status";
 type CatalogColumn = { id: CatalogColumnId; label: string; required?: boolean; width: string };
@@ -573,13 +573,46 @@ function graphFor(run: Run): { nodes: PositionedWorkflowNode[]; edges: WorkflowE
   const graph = run.workflow_graph;
   const rawNodes: WorkflowNode[] = graph ? graph.nodes.map((node) => ({
     id: node.stage_id, name: node.label, type: node.node_type, status: node.state, availability: node.availability,
-    artifactKind: node.artifact_kind, reason: node.reason, metric: node.metric ?? (node.artifact_kind ? String(run.artifacts.filter((artifact) => artifact.kind === node.artifact_kind).length) : "—"), parentNodeId: node.parent_node_id
+    artifactKind: node.artifact_kind, reason: node.reason, metric: node.metric ?? (node.artifact_kind ? String(run.artifacts.filter((artifact) => artifact.kind === node.artifact_kind).length) : "—"), parentNodeId: node.parent_node_id, agentRole: node.agent_role
   })) : (run.stages ?? []).map((stage) => ({
     id: stage.stage_id, name: stage.label, type: stage.stage_id.includes("approval") ? "gate" : stage.stage_id === "work_specification" || stage.stage_id === "specification" ? "queue" : "agent", status: stage.state, availability: stage.availability,
     artifactKind: stage.artifact_kind, reason: stage.reason, metric: stage.artifact_kind ? String(run.artifacts.filter((artifact) => artifact.kind === stage.artifact_kind).length) : "—"
   }));
   const environmentChildren = new Map<string, WorkflowNode[]>();
   rawNodes.forEach((node) => { if (node.parentNodeId) environmentChildren.set(node.parentNodeId, [...(environmentChildren.get(node.parentNodeId) ?? []), node]); });
+  if (environmentChildren.size) {
+    const NODE_W = 200, NODE_H = 128, COL_GAP = 90, ROW_GAP = 24, PAD = 44;
+    // The rail owns phase order; child order within each phase is the server's
+    // execution order. Never infer phase columns from graph connectivity.
+    const phaseGraph = { nodes: rawNodes.map((node) => ({ ...node, position: { x: 0, y: 0, width: NODE_W } })), edges: [], groups: [], width: 0, height: 0 };
+    const columns = lifecyclePhasesFor(run).map((phase) => {
+      const parent = lifecyclePhaseNode(phaseGraph, run, phase) ?? {
+        id: phase, name: statusLabel(phase).replace(/^./, (letter) => letter.toUpperCase()),
+        type: phase.includes("approval") ? "gate" as const : "agent" as const,
+        status: "unavailable", availability: "unavailable" as const, artifactKind: null,
+        reason: "This lifecycle phase has not been recorded for the run.", metric: "—"
+      };
+      return { parent, children: environmentChildren.get(phase) ?? [parent] };
+    });
+    const stackHeight = (count: number) => count * NODE_H + (count - 1) * ROW_GAP;
+    const tallest = Math.max(...columns.map(({ children }) => stackHeight(children.length)));
+    const nodes: PositionedWorkflowNode[] = [];
+    const groups: RelayEnvironmentGroup[] = [];
+    columns.forEach(({ parent, children }, column) => {
+      const x = PAD + column * (NODE_W + COL_GAP);
+      const top = PAD + (tallest - stackHeight(children.length)) / 2;
+      children.forEach((node, row) => nodes.push({ ...node, position: { x, y: top + row * (NODE_H + ROW_GAP), width: NODE_W } }));
+      if (children.length > 1) groups.push({
+        id: parent.id, label: `${parent.name} · agent environments`, status: parent.status,
+        position: { x: x - 20, y: top - 30, width: NODE_W + 40, height: stackHeight(children.length) + 50 }
+      });
+    });
+    // One sequential path replaces parent-level edges and any child fan-out.
+    const edges: WorkflowEdge[] = nodes.slice(1).map((node, index) => ({
+      fromNodeId: nodes[index].id, toNodeId: node.id, style: "solid", emphasis: "primary"
+    }));
+    return { nodes, edges, groups, width: PAD * 2 + columns.length * NODE_W + (columns.length - 1) * COL_GAP, height: PAD * 2 + tallest };
+  }
   const sourceNodes = rawNodes.filter((node) => !environmentChildren.has(node.id));
   const sourceNodeById = new Map(sourceNodes.map((node) => [node.id, node]));
   const firstChild = (id: string) => environmentChildren.get(id)?.[0]?.id ?? id;
@@ -631,7 +664,7 @@ function graphFor(run: Run): { nodes: PositionedWorkflowNode[]; edges: WorkflowE
     const parentLabel = rawNodes.find((node) => node.id === parentId)?.name ?? statusLabel(parentId).replace(/^./, (letter) => letter.toUpperCase());
     const top = Math.min(...positioned.map((node) => node.position.y));
     const bottom = Math.max(...positioned.map((node) => node.position.y + NODE_H));
-    return [{ id: parentId, label: `${parentLabel} · agent environments`, position: { x: positioned[0].position.x - 12, y: top - 30, width: NODE_W + 24, height: bottom - top + 60 } }];
+    return [{ id: parentId, label: `${parentLabel} · agent environments`, status: rawNodes.find((node) => node.id === parentId)?.status ?? "unavailable", position: { x: positioned[0].position.x - 12, y: top - 30, width: NODE_W + 24, height: bottom - top + 60 } }];
   });
   return { nodes, edges, groups, width, height };
 }
@@ -732,13 +765,13 @@ function relayEdgePath(source: PositionedWorkflowNode, target: PositionedWorkflo
   const y1 = source.position.y + 64;
   const x2 = target.position.x;
   const y2 = target.position.y + 64;
-  const midX = (x1 + x2) / 2;
-  return `M ${x1},${y1} C ${midX},${y1} ${midX},${y2} ${x2},${y2}`;
+  const offset = source.parentNodeId || target.parentNodeId ? 34 : (x2 - x1) / 2;
+  return `M ${x1},${y1} C ${x1 + offset},${y1} ${x2 - offset},${y2} ${x2},${y2}`;
 }
 
 function ComputedRelayCanvas({ graph, onSelect }: { graph: ReturnType<typeof graphFor>; onSelect: (node: PositionedWorkflowNode) => void }) {
   const byId = new Map(graph.nodes.map((node) => [node.id, node]));
-  return <div className="relay-grid-scroll"><div className="relay-grid-canvas" style={{ width: graph.width, height: graph.height }}><div className="relay-environment-groups" aria-hidden="true">{graph.groups.map((group) => <div key={group.id} className="relay-environment-group" style={{ left: group.position.x, top: group.position.y, width: group.position.width, height: group.position.height }}><span>{group.label}</span></div>)}</div><svg className="relay-edges" width={graph.width} height={graph.height} aria-hidden="true">{graph.edges.map((edge) => { const source = byId.get(edge.fromNodeId); const target = byId.get(edge.toNodeId); return source && target ? <path key={`${edge.fromNodeId}:${edge.toNodeId}`} d={relayEdgePath(source, target)} className={edge.emphasis} strokeDasharray={edge.style === "dashed" ? "5 5" : undefined} /> : null; })}</svg>{graph.nodes.map((node) => <button key={node.id} aria-label={`Select ${node.name}`} className={`relay-grid-node ${node.type} ${statusTone(node.status)}`} style={{ left: node.position.x, top: node.position.y, width: node.position.width }} onClick={() => onSelect(node)}><span className="relay-node-icon" aria-hidden="true">{node.type === "agent" ? "✦" : node.type === "gate" ? "◇" : "▤"}</span><span className="relay-node-copy"><b>{node.name}</b><small>{node.type}</small></span><i className="relay-node-status" /><span className="relay-node-metric"><b>{node.metric}</b><small>{node.parentNodeId ? "execution environment" : evidenceCaption(node)}</small></span></button>)}</div></div>;
+  return <div className="relay-grid-scroll"><div className={`relay-grid-canvas${graph.nodes.some((node) => node.parentNodeId) ? " relay-phase-stacks" : ""}`} style={{ width: graph.width, height: graph.height }}><div className="relay-environment-groups" aria-hidden="true">{graph.groups.map((group) => <div key={group.id} className={`relay-environment-group ${statusTone(group.status)}`} style={{ left: group.position.x, top: group.position.y, width: group.position.width, height: group.position.height }}><span>{group.label}</span></div>)}</div><svg className="relay-edges" width={graph.width} height={graph.height} aria-hidden="true">{graph.edges.map((edge) => { const source = byId.get(edge.fromNodeId); const target = byId.get(edge.toNodeId); return source && target ? <path key={`${edge.fromNodeId}:${edge.toNodeId}`} d={relayEdgePath(source, target)} className={edge.emphasis} strokeDasharray={edge.style === "dashed" ? "5 5" : undefined} /> : null; })}</svg>{graph.nodes.map((node) => <button key={node.id} aria-label={`Select ${node.name}`} className={`relay-grid-node ${node.type} ${statusTone(node.status)}`} style={{ left: node.position.x, top: node.position.y, width: node.position.width }} onClick={() => onSelect(node)}><span className="relay-node-icon" aria-hidden="true">{node.type === "agent" ? "✦" : node.type === "gate" ? "◇" : "▤"}</span><span className="relay-node-copy"><b>{node.name}</b><small>{node.agentRole ?? node.type}</small></span><i className="relay-node-status" /><span className="relay-node-metric"><b>{node.metric}</b><small>{node.parentNodeId ? "execution environment" : evidenceCaption(node)}</small></span></button>)}</div></div>;
 }
 
 function VisualizeOverlay({ graph, title, onClose, onSelect }: { graph: ReturnType<typeof graphFor>; title: string; onClose: () => void; onSelect: (node: PositionedWorkflowNode) => void }) {
