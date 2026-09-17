@@ -24,7 +24,9 @@ const lifecyclePhaseIds: LifecyclePhaseId[] = ["work_specification", "planning",
 const legacyLifecyclePhaseIds: LifecyclePhaseId[] = ["specification", "product_specification", "specification_evaluation", "planning", "plan_approval", "implementation", "implementation_approval"];
 const allLifecyclePhaseIds: LifecyclePhaseId[] = [...lifecyclePhaseIds, "specification", "product_specification", "specification_evaluation"];
 function lifecyclePhasesFor(run: Run): LifecyclePhaseId[] {
-  return run.stages?.some((stage) => stage.stage_id === "work_specification") ? lifecyclePhaseIds : legacyLifecyclePhaseIds;
+  const hasWorkSpecification = run.stages?.some((stage) => stage.stage_id === "work_specification")
+    || run.workflow_graph?.nodes.some((node) => node.stage_id === "work_specification" || node.parent_node_id === "work_specification");
+  return hasWorkSpecification ? lifecyclePhaseIds : legacyLifecyclePhaseIds;
 }
 type WorkflowNode = { id: string; name: string; type: "agent" | "gate" | "queue"; status: string; availability: Stage["availability"]; artifactKind: Artifact["kind"] | null; reason: string; position?: { x: number; y: number; width: number }; metric: string; parentNodeId?: string | null; agentRole?: string | null };
 type WorkflowEdge = { fromNodeId: string; toNodeId: string; style: "solid" | "dashed"; emphasis: "primary" | "secondary" };
